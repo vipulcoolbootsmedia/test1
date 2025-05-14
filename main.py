@@ -1,6 +1,7 @@
 from fastapi import FastAPI, HTTPException
 from schemas import *
 from crud import *
+from fastapi import Path
 
 app = FastAPI()
 
@@ -53,13 +54,13 @@ def submit_grow_choice(choice: ChoiceInput):
 
 # 8. Update user trait profile
 @app.patch("/user/{user_id}/update-traits")
-def update_traits(user_id: int, data: UpdateTraits):
-    return update_user_traits(user_id, data)
+def update_traits(user_id: int = Path(...), traits: UpdateTraitProfile = ...):
+    return update_user_traits(user_id, traits.trait_profile)
 
 # 9. Increment games played
 @app.patch("/user/{user_id}/add-game")
-def increment_games(user_id: int):
-    return add_game_played(user_id)
+def add_game(user_id: int, game_data: AddGameData):
+    return add_game_to_user(user_id, game_data.game_id, game_data.game_data)
 
 # 10. Get game history
 @app.get("/user/{user_id}/games")

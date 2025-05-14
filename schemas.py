@@ -44,3 +44,11 @@ class GenerateScenarioInput(BaseModel):
     depth: int
     narrative: str
     choices: List[str]
+
+
+class UpdateTraitProfile(BaseModel):
+    trait_profile: Dict[str, int]
+
+class AddGameData(BaseModel):
+    game_id: str
+    game_data: Dict[str, str]  # E.g., {"score": "100", "duration": "30min"}

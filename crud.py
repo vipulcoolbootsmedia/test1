@@ -40,3 +40,52 @@ def create_user_in_db(user):
     cursor.close()
     conn.close()
     return {"message": "User created"}
+
+
+def update_user_traits(user_id: int, traits: dict):
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    # Fetch current traits
+    cursor.execute("SELECT trait_profile FROM user_info WHERE userid = %s", (user_id,))
+    result = cursor.fetchone()
+    if not result:
+        conn.close()
+        return {"error": "User not found"}
+
+    current_traits = json.loads(result[0])
+    current_traits.update(traits)
+
+    cursor.execute("""
+        UPDATE user_info SET trait_profile = %s WHERE userid = %s
+    """, (json.dumps(current_traits), user_id))
+
+    conn.commit()
+    cursor.close()
+    conn.close()
+    return {"message": "Trait profile updated", "updated_traits": current_traits}
+
+def add_game_to_user(user_id: int, game_id: str, game_data: dict):
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("SELECT game_history, game_played FROM user_info WHERE userid = %s", (user_id,))
+    result = cursor.fetchone()
+    if not result:
+        conn.close()
+        return {"error": "User not found"}
+
+    game_history = json.loads(result[0]) if result[0] else {}
+    game_played = result[1] if result[1] else 0
+
+    game_history[game_id] = game_data
+    game_played += 1
+
+    cursor.execute("""
+        UPDATE user_info SET game_history = %s, game_played = %s WHERE userid = %s
+    """, (json.dumps(game_history), game_played, user_id))
+
+    conn.commit()
+    cursor.close()
+    conn.close()
+    return {"message": "Game data added", "game_history": game_history, "game_played": game_played}
