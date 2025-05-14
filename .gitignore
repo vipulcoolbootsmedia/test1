@@ -1,0 +1,55 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environment
+venv/
+env/
+.venv/
+.env/
+
+# VSCode settings
+.vscode/
+
+# Environment variable files
+.env
+*.env
+
+# Logs and local DB
+*.log
+*.sqlite3
+
+# OS-specific
+.DS_Store
+Thumbs.db
+
+# Testing and coverage
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+.hypothesis/
+
+# PyInstaller
+*.spec
+dist/
+build/
+
+# mypy
+.mypy_cache/
+
+# Pydantic compiled models
+*.pydantic/
+
+# Database dumps
+*.sql
+*.bak
+
+# FastAPI generated OpenAPI schema
+openapi.json
