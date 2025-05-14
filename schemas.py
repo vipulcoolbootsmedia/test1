@@ -2,6 +2,7 @@ from pydantic import BaseModel, EmailStr
 from typing import Optional, Dict,List, Literal
 from datetime import datetime
 
+
 class UserCreate(BaseModel):
     username: str
     email: EmailStr
@@ -52,3 +53,7 @@ class UpdateTraitProfile(BaseModel):
 class AddGameData(BaseModel):
     game_id: str
     game_data: Dict[str, str]  # E.g., {"score": "100", "duration": "30min"}
+
+class SessionStart(BaseModel):
+    user_id: int
+    mode: Literal["learn", "grow"]

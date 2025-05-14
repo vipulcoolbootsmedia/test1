@@ -89,3 +89,54 @@ def add_game_to_user(user_id: int, game_id: str, game_data: dict):
     cursor.close()
     conn.close()
     return {"message": "Game data added", "game_history": game_history, "game_played": game_played}
+
+def start_game_session(user_id: int, mode: str):
+    conn = get_connection()
+    cursor = conn.cursor()
+    
+    # Check if user exists
+    cursor.execute("SELECT userid FROM user_info WHERE userid = %s", (user_id,))
+    if not cursor.fetchone():
+        cursor.close()
+        conn.close()
+        return {"error": "User not found"}
+    
+    # Insert new session
+    cursor.execute("""
+        INSERT INTO game_session (user_id, mode) 
+        VALUES (%s, %s)
+    """, (user_id, mode))
+    
+    session_id = cursor.lastrowid
+    conn.commit()
+    cursor.close()
+    conn.close()
+    
+    return {
+        "message": "Session started successfully",
+        "session_id": session_id,
+        "user_id": user_id,
+        "mode": mode
+    }
+
+def get_session_details(session_id: int):
+    conn = get_connection()
+    cursor = conn.cursor(dictionary=True)
+    
+    cursor.execute("""
+        SELECT session_id, user_id, mode, started_at 
+        FROM game_session 
+        WHERE session_id = %s
+    """, (session_id,))
+    
+    session = cursor.fetchone()
+    cursor.close()
+    conn.close()
+    
+    if not session:
+        return {"error": "Session not found"}
+    
+    # Convert datetime to string for JSON serialization
+    session['started_at'] = str(session['started_at'])
+    
+    return session

@@ -24,8 +24,8 @@ def get_user(userid: int):
 
 # 2. Start session
 @app.post("/session/start")
-def start_session(data: StartSession):
-    return start_game_session(data)
+def start_session(session: SessionStart):
+    return start_game_session(session.user_id, session.mode)
 
 # 3. Get static scenario
 @app.get("/learn/scenario/{depth}")
@@ -68,6 +68,9 @@ def get_user_history(user_id: int):
     return get_user_game_history(user_id)
 
 # 11. Get session details
-@app.get("/session/{session_id}/info")
-def get_session_info(session_id: int):
-    return get_session_data(session_id)
+@app.get("/session/{session_id}")
+def get_session(session_id: int):
+    result = get_session_details(session_id)
+    if "error" in result:
+        raise HTTPException(status_code=404, detail=result["error"])
+    return result
