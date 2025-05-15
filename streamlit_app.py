@@ -1,190 +1,578 @@
 import streamlit as st
 import requests
-import json
+from datetime import datetime
+import pandas as pd
+import plotly.express as px
+import plotly.graph_objects as go
 
-# API base URL
+# Configuration
 API_URL = "http://localhost:8000"
 
 # Initialize session state
+if 'token' not in st.session_state:
+    st.session_state.token = None
+if 'user' not in st.session_state:
+    st.session_state.user = None
 if 'session_id' not in st.session_state:
     st.session_state.session_id = None
 if 'current_path' not in st.session_state:
     st.session_state.current_path = ""
 if 'current_scenario' not in st.session_state:
     st.session_state.current_scenario = None
-if 'game_active' not in st.session_state:
-    st.session_state.game_active = False
-if 'user_id' not in st.session_state:
-    st.session_state.user_id = 1  # Default user
-if 'scenario_id' not in st.session_state:
-    st.session_state.scenario_id = 1  # Default scenario
+if 'game_mode' not in st.session_state:
+    st.session_state.game_mode = None
 
-st.title("🎭 Psychological Thriller - Learn Module Tester")
-st.markdown("---")
-
-# Sidebar for configuration
-with st.sidebar:
-    st.header("⚙️ Configuration")
-    st.session_state.user_id = st.number_input("User ID", min_value=1, value=1)
-    st.session_state.scenario_id = st.number_input("Scenario ID", min_value=1, value=1)
+def make_request(method, endpoint, data=None, params=None):
+    """Make API request with authentication"""
+    headers = {}
+    if st.session_state.token:
+        headers["Authorization"] = f"Bearer {st.session_state.token}"
     
-    if st.button("🚀 Start New Game"):
-        # Start a new session
-        response = requests.post(f"{API_URL}/session/start", json={
-            "user_id": st.session_state.user_id,
-            "mode": "learn",
-            "scenario_id": st.session_state.scenario_id
-        })
+    url = f"{API_URL}{endpoint}"
+    
+    if method == "GET":
+        response = requests.get(url, headers=headers, params=params)
+    elif method == "POST":
+        response = requests.post(url, json=data, headers=headers)
+    elif method == "PATCH":
+        response = requests.patch(url, json=data, headers=headers)
+    elif method == "DELETE":
+        response = requests.delete(url, headers=headers)
+    
+    return response
+
+def login_page():
+    """Login/Register page"""
+    st.title("🎭 Psychological Thriller Game")
+    
+    tab1, tab2 = st.tabs(["Login", "Register"])
+    
+    with tab1:
+        with st.form("login_form"):
+            username = st.text_input("Username")
+            password = st.text_input("Password", type="password")
+            
+            if st.form_submit_button("Login"):
+                response = requests.post(
+                    f"{API_URL}/auth/login",
+                    data={"username": username, "password": password}
+                )
+                
+                if response.status_code == 200:
+                    data = response.json()
+                    st.session_state.token = data["access_token"]
+                    
+                    # Get user info
+                    user_response = make_request("GET", "/users/me")
+                    if user_response.status_code == 200:
+                        st.session_state.user = user_response.json()
+                        st.success("Login successful!")
+                        st.rerun()
+                else:
+                    st.error("Invalid credentials")
+
         
-        if response.status_code == 200:
-            data = response.json()
-            st.session_state.session_id = data['session_id']
-            st.session_state.current_path = ""
-            st.session_state.game_active = True
-            st.success(f"Game started! Session ID: {st.session_state.session_id}")
-            st.rerun()
-        else:
-            st.error(f"Error starting game: {response.json()}")
-    
-    if st.session_state.session_id:
-        st.info(f"Current Session: {st.session_state.session_id}")
-        st.info(f"Current Path: {st.session_state.current_path or 'Start'}")
-    
-    st.markdown("---")
-    st.header("📊 Debug Info")
-    if st.checkbox("Show Raw Scenario Data"):
-        st.json(st.session_state.current_scenario)
+    # In streamlit_app.py, update the registration error handling:
 
-# Main game area
-if st.session_state.game_active and st.session_state.session_id:
-    # Get current scenario
+    with tab2:
+        with st.form("register_form"):
+            username = st.text_input("Username")
+            email = st.text_input("Email")
+            password = st.text_input("Password", type="password")
+            confirm_password = st.text_input("Confirm Password", type="password")
+            
+            if st.form_submit_button("Register"):
+                if password != confirm_password:
+                    st.error("Passwords do not match")
+                else:
+                    response = make_request("POST", "/auth/register", {
+                        "username": username,
+                        "email": email,
+                        "password": password
+                    })
+                    
+                    if response.status_code == 200:
+                        st.success("Registration successful! Please login.")
+                    else:
+                        # Better error handling
+                        try:
+                            error_detail = response.json().get("detail", "Registration failed")
+                        except:
+                            error_detail = f"Registration failed: {response.status_code}"
+                        st.error(error_detail)
+
+def game_selection_page():
+    """Game mode selection page"""
+    st.title("🎮 Select Game Mode")
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.subheader("📚 Learn Mode")
+        st.write("Play through carefully crafted scenarios designed to test specific traits.")
+        
+        # Get available scenarios
+        scenarios_response = make_request("GET", "/learn/scenarios")
+        if scenarios_response.status_code == 200:
+            scenarios = scenarios_response.json()
+            scenario_id = st.selectbox(
+                "Select Scenario",
+                options=[s["scenario_id"] for s in scenarios],
+                format_func=lambda x: f"Scenario {x}"
+            )
+            
+            if st.button("Start Learn Mode"):
+                # Create session
+                session_response = make_request("POST", "/sessions/", {
+                    "mode": "learn",
+                    "scenario_id": scenario_id
+                })
+                
+                if session_response.status_code == 200:
+                    st.session_state.session_id = session_response.json()["session_id"]
+                    st.session_state.game_mode = "learn"
+                    st.session_state.current_path = ""
+                    st.rerun()
+    
+    with col2:
+        st.subheader("🌱 Grow Mode")
+        st.write("Experience dynamically generated scenarios powered by AI.")
+        
+        trait_focus = st.selectbox(
+            "Select Trait Focus",
+            ["bravery", "honesty", "curiosity", "empathy", "patience"]
+        )
+        
+        if st.button("Start Grow Mode"):
+            # Create session
+            session_response = make_request("POST", "/sessions/", {
+                "mode": "grow"
+            })
+            
+            if session_response.status_code == 200:
+                st.session_state.session_id = session_response.json()["session_id"]
+                st.session_state.game_mode = "grow"
+                st.session_state.trait_focus = trait_focus
+                st.rerun()
+
+def learn_game_page():
+    """Learn mode gameplay"""
+    st.title("📚 Learn Mode")
+    
     if st.session_state.current_scenario is None:
         # Get starting scenario
-        response = requests.get(f"{API_URL}/learn/scenario/{st.session_state.session_id}/start")
+        response = make_request(
+            "GET",
+            f"/learn/scenario/{st.session_state.session_id}/start"
+        )
+        
         if response.status_code == 200:
             st.session_state.current_scenario = response.json()
         else:
-            st.error(f"Error loading scenario: {response.json()}")
-            st.stop()
+            st.error("Failed to load scenario")
+            return
     
-    # Display current scenario
     scenario = st.session_state.current_scenario
     
-    # Scene header
-    st.header(f"🎬 Scene {scenario.get('depth', 1)}")
+    # Display scenario
+    st.header(f"Depth {scenario.get('depth', 1)}")
     
-    # Display narrative purpose
-    if 'narrative_purpose' in scenario:
-        st.caption(f"*{scenario['narrative_purpose']}*")
+    # Scene narrative
+    for narrative in scenario.get("scene_narrative", []):
+        st.markdown(f"**{narrative['text']}**")
+        if narrative.get("sfx"):
+            st.caption(f"🔊 {narrative['sfx']}")
     
-    # Display scene narrative
-    if 'scene_narrative' in scenario:
-        for narrative in scenario['scene_narrative']:
-            col1, col2 = st.columns([5, 1])
-            with col1:
-                st.markdown(f"**{narrative['text']}**")
-            with col2:
-                if narrative.get('sfx'):
-                    st.caption(f"🔊 {narrative['sfx']}")
-    
-    # Display image prompt (if available)
-    if 'image_gen_prompt' in scenario:
-        with st.expander("🖼️ Scene Visualization"):
-            st.info(scenario['image_gen_prompt'])
-    
-    # Check if game has ended
-    if scenario.get('is_end', False):
+    # Check if game ended
+    if scenario.get("is_end", False):
         st.balloons()
         st.success("🎭 The End!")
-        st.markdown("---")
         
-        # Show final stats
-        st.subheader("📊 Your Journey")
-        st.write(f"Final Path: {st.session_state.current_path}")
-        st.write(f"Depth Reached: {scenario.get('depth', 5)}")
-        
-        if st.button("🔄 Play Again"):
+        if st.button("Return to Menu"):
             st.session_state.session_id = None
-            st.session_state.current_path = ""
             st.session_state.current_scenario = None
-            st.session_state.game_active = False
+            st.session_state.game_mode = None
             st.rerun()
     else:
         # Display choices
         st.markdown("---")
-        st.subheader("🤔 What will you do?")
+        choices = scenario.get("choices", [])
         
-        choices = scenario.get('choices', [])
-        
-        # Create columns for choices
-        cols = st.columns(len(choices))
-        
-        for idx, (choice, col) in enumerate(zip(choices, cols)):
-            with col:
-                # Show trait impact
-                trait_info = choice.get('maps_to_trait_details', {})
-                trait = trait_info.get('trait', 'unknown')
-                degree = trait_info.get('degree', 'unknown')
+        for choice in choices:
+            trait_info = choice.get("maps_to_trait_details", {})
+            
+            if st.button(
+                f"{choice['choice_id']}: {choice['choice_text']}",
+                help=f"Affects {trait_info.get('trait', 'unknown')} ({trait_info.get('degree', 'unknown')})"
+            ):
+                # Record choice
+                make_request(
+                    "POST",
+                    f"/learn/choice/{st.session_state.session_id}",
+                    {
+                        "depth": scenario["depth"],
+                        "choice_id": choice["choice_id"],
+                        "trait_impact": trait_info.get("degree", "moderate")
+                    }
+                )
                 
-                # Create styled button
-                button_text = f"{choice['choice_id']}: {choice['choice_text']}"
+                # Update path and get next scenario
+                st.session_state.current_path += choice["choice_id"]
                 
-                if st.button(button_text, key=f"choice_{idx}", 
-                           help=f"Affects {trait} ({degree})"):
+                response = make_request(
+                    "POST",
+                    f"/learn/scenario/{st.session_state.session_id}/by-path",
+                    {"path": st.session_state.current_path}
+                )
+                
+                if response.status_code == 200:
+                    st.session_state.current_scenario = response.json()
+                    st.rerun()
+
+def grow_game_page():
+    """Grow mode gameplay"""
+    st.title("🌱 Grow Mode")
+    
+    depth = st.session_state.get("current_depth", 1)
+    
+    if st.session_state.current_scenario is None:
+        # Generate first scenario
+        with st.spinner("Generating scenario..."):
+            response = make_request(
+                "POST",
+                f"/grow/scenario/{st.session_state.session_id}/generate",
+                {
+                    "depth": depth,
+                    "trait_focus": st.session_state.get("trait_focus", "bravery"),
+                    "previous_choices": st.session_state.get("previous_choices", [])
+                }
+            )
+            
+            if response.status_code == 200:
+                data = response.json()
+                st.session_state.current_scenario = data["scenario"]
+            else:
+                st.error("Failed to generate scenario")
+                return
+    
+    scenario = st.session_state.current_scenario
+    
+    # Display scenario
+    st.header(f"Depth {scenario.get('depth', depth)}")
+    
+    # Scene narrative
+    for narrative in scenario.get("scene_narrative", []):
+        st.markdown(f"**{narrative['text']}**")
+        if narrative.get("sfx"):
+            st.caption(f"🔊 {narrative['sfx']}")
+    
+    # Check if game ended
+    if scenario.get("is_end", False):
+        st.balloons()
+        st.success("🎭 The End!")
+        
+        # End session
+        make_request("PATCH", f"/sessions/{st.session_state.session_id}/end", {"is_completed": True})
+        
+        if st.button("Return to Menu"):
+            st.session_state.session_id = None
+            st.session_state.current_scenario = None
+            st.session_state.game_mode = None
+            st.rerun()
+    else:
+        # Display choices
+        st.markdown("---")
+        choices = scenario.get("choices", [])
+        
+        for choice in choices:
+            trait_info = choice.get("maps_to_trait_details", {})
+            
+            if st.button(
+                f"{choice['choice_id']}: {choice['choice_text']}",
+                help=f"Affects {trait_info.get('trait', 'unknown')} ({trait_info.get('degree', 'unknown')})"
+            ):
+                # Record choice
+                make_request(
+                    "POST",
+                    f"/grow/choice/{st.session_state.session_id}",
+                    {
+                        "depth": scenario["depth"],
+                        "choice_id": choice["choice_id"],
+                        "trait_impact": trait_info.get("degree", "moderate")
+                    }
+                )
+                
+                # Update state for next scenario
+                if "previous_choices" not in st.session_state:
+                    st.session_state.previous_choices = []
+                st.session_state.previous_choices.append(choice["choice_id"])
+                st.session_state.current_depth = depth + 1
+                st.session_state.current_scenario = None
+                st.rerun()
+
+def analytics_page():
+    """Analytics dashboard"""
+    st.title("📊 Analytics Dashboard")
+    
+    tab1, tab2, tab3 = st.tabs(["Personal Stats", "Leaderboard", "Game Analytics"])
+    
+    with tab1:
+        # Get user stats
+        stats_response = make_request(
+            "GET",
+            f"/analytics/user/{st.session_state.user['userid']}/stats"
+        )
+        
+        if stats_response.status_code == 200:
+            stats = stats_response.json()
+            
+            col1, col2, col3 = st.columns(3)
+            
+            with col1:
+                st.metric("Games Played", stats["user_data"]["game_played"])
+            
+            with col2:
+                st.metric("Sessions", len(stats.get("session_stats", [])))
+            
+            with col3:
+                # Calculate average trait
+                traits = stats["user_data"]["trait_profile"]
+                
+                # Parse JSON if it's a string
+                if isinstance(traits, str):
+                    import json
+                    traits = json.loads(traits)
+                
+                avg_trait = sum(traits.values()) / len(traits) if traits else 0
+                st.metric("Average Trait Score", f"{avg_trait:.1f}")
+            
+            # Trait profile chart
+            if traits:  # Now 'traits' is guaranteed to be a dict
+                traits_df = pd.DataFrame(
+                    list(traits.items()),
+                    columns=["Trait", "Value"]
+                )
+                
+                fig = px.bar(
+                    traits_df,
+                    x="Trait",
+                    y="Value",
+                    title="Trait Profile",
+                    color="Value",
+                    color_continuous_scale="Blues"
+                )
+                st.plotly_chart(fig)
+            
+            # Session history
+            st.subheader("Recent Sessions")
+            sessions_response = make_request(
+                "GET",
+                f"/sessions/user/{st.session_state.user['userid']}"
+            )
+            
+            if sessions_response.status_code == 200:
+                sessions = sessions_response.json()
+                if sessions:
+                    sessions_df = pd.DataFrame(sessions)
+                    sessions_df["started_at"] = pd.to_datetime(sessions_df["started_at"])
+                    st.dataframe(sessions_df[["session_id", "mode", "started_at", "is_completed"]])
+    
+    with tab2:
+        # Leaderboard
+        leaderboard_response = make_request("GET", "/analytics/leaderboard")
+        
+        if leaderboard_response.status_code == 200:
+            leaderboard = leaderboard_response.json()
+            
+            if leaderboard:
+                df = pd.DataFrame(leaderboard)
+                
+                # Create ranking chart
+                fig = go.Figure(data=[
+                    go.Bar(
+                        x=df["username"],
+                        y=df["game_played"],
+                        text=df.get("dominant_trait", ""),
+                        textposition="auto",
+                        marker_color='lightblue'
+                    )
+                ])
+                
+                fig.update_layout(
+                    title="Top Players by Games Played",
+                    xaxis_title="Player",
+                    yaxis_title="Games Played",
+                    showlegend=False
+                )
+                
+                st.plotly_chart(fig)
+                
+                # Detailed leaderboard table
+                columns_to_show = ["username", "game_played", "completed_sessions"]
+                if "dominant_trait" in df.columns:
+                    columns_to_show.append("dominant_trait")
+                st.dataframe(df[columns_to_show])
+    
+    with tab3:
+        # Choice analytics
+        st.subheader("Choice Distribution")
+        
+        choices_response = make_request("GET", "/analytics/choices/distribution")
+        
+        if choices_response.status_code == 200:
+            choices = choices_response.json()
+            
+            if choices:
+                df = pd.DataFrame(choices)
+                
+                # Group by depth and choice
+                if not df.empty and "depth" in df.columns and "choice_id" in df.columns:
+                    depth_choices = df.groupby(["depth", "choice_id"])["count"].sum().reset_index()
                     
-                    # Record the choice
-                    choice_response = requests.post(f"{API_URL}/learn/choice", json={
-                        "session_id": st.session_state.session_id,
-                        "depth": scenario['depth'],
-                        "choice_id": choice['choice_id'],
-                        "trait_impact": degree
-                    })
+                    fig = px.bar(
+                        depth_choices,
+                        x="depth",
+                        y="count",
+                        color="choice_id",
+                        title="Choices by Depth",
+                        labels={"count": "Number of Times Chosen", "depth": "Story Depth"}
+                    )
                     
-                    if choice_response.status_code == 200:
-                        # Update path
-                        st.session_state.current_path += choice['choice_id']
-                        
-                        # Get next scenario
-                        path_response = requests.post(
-                            f"{API_URL}/learn/scenario/{st.session_state.session_id}/by-path",
-                            json={"path": st.session_state.current_path}
+                    st.plotly_chart(fig)
+                
+                # Trait impact distribution
+                if "trait_impact" in df.columns:
+                    trait_impact = df.groupby("trait_impact")["count"].sum().reset_index()
+                    
+                    fig2 = px.pie(
+                        trait_impact,
+                        values="count",
+                        names="trait_impact",
+                        title="Trait Impact Distribution"
+                    )
+                    
+                    st.plotly_chart(fig2)
+
+def profile_page():
+    """User profile page"""
+    st.title("👤 Profile")
+    
+    user = st.session_state.user
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.subheader("User Information")
+        st.write(f"**Username:** {user['username']}")
+        st.write(f"**Email:** {user['email']}")
+        st.write(f"**Joined:** {user['created_at']}")
+        st.write(f"**Games Played:** {user['game_played']}")
+    
+    with col2:
+        st.subheader("Trait Profile")
+        if user.get("trait_profile"):
+            for trait, value in user["trait_profile"].items():
+                st.progress(value / 100, text=f"{trait.capitalize()}: {value}")
+    
+    # Update profile
+    st.markdown("---")
+    st.subheader("Update Profile")
+    
+    with st.form("update_profile"):
+        new_email = st.text_input("Email", value=user["email"])
+        
+        if st.form_submit_button("Update"):
+            response = make_request(
+                "PATCH",
+                f"/users/{user['userid']}",
+                {"email": new_email}
+            )
+            
+            if response.status_code == 200:
+                st.success("Profile updated successfully")
+                # Refresh user data
+                user_response = make_request("GET", "/users/me")
+                if user_response.status_code == 200:
+                    st.session_state.user = user_response.json()
+                    st.rerun()
+
+def main():
+    """Main application"""
+    st.set_page_config(
+        page_title="Psychological Thriller Game",
+        page_icon="🎭",
+        layout="wide"
+    )
+    
+    # Check authentication
+    if not st.session_state.token:
+        login_page()
+        return
+    
+    # Sidebar navigation
+    with st.sidebar:
+        st.title(f"Welcome, {st.session_state.user['username']}!")
+        
+        if st.session_state.game_mode:
+            # In-game navigation
+            page = st.selectbox(
+                "Navigation",
+                ["Game", "Analytics", "Profile", "End Game"]
+            )
+            
+            if page == "End Game":
+                if st.button("Confirm End Game"):
+                    # End current session
+                    if st.session_state.session_id:
+                        make_request(
+                            "PATCH",
+                            f"/sessions/{st.session_state.session_id}/end",
+                            {"is_completed": False}
                         )
-                        
-                        if path_response.status_code == 200:
-                            st.session_state.current_scenario = path_response.json()
-                            st.rerun()
-                        else:
-                            st.error(f"Error getting next scenario: {path_response.json()}")
-                    else:
-                        st.error(f"Error recording choice: {choice_response.json()}")
-                
-                # Show hidden message in expander
-                if 'short_hidden_message' in choice:
-                    with st.expander(f"🔮 Hidden Insight ({choice['choice_id']})"):
-                        st.caption(choice['short_hidden_message'])
+                    
+                    # Reset game state
+                    st.session_state.session_id = None
+                    st.session_state.current_scenario = None
+                    st.session_state.game_mode = None
+                    st.session_state.current_path = ""
+                    st.session_state.current_depth = 1
+                    st.session_state.previous_choices = []
+                    st.rerun()
+        else:
+            # Main menu navigation
+            page = st.selectbox(
+                "Navigation",
+                ["Play Game", "Analytics", "Profile", "Logout"]
+            )
+            
+            if page == "Logout":
+                if st.button("Confirm Logout"):
+                    for key in st.session_state.keys():
+                        del st.session_state[key]
+                    st.rerun()
+    
+    # Route to appropriate page
+    if st.session_state.game_mode == "learn":
+        if page == "Game":
+            learn_game_page()
+        elif page == "Analytics":
+            analytics_page()
+        elif page == "Profile":
+            profile_page()
+    elif st.session_state.game_mode == "grow":
+        if page == "Game":
+            grow_game_page()
+        elif page == "Analytics":
+            analytics_page()
+        elif page == "Profile":
+            profile_page()
+    else:
+        if page == "Play Game":
+            game_selection_page()
+        elif page == "Analytics":
+            analytics_page()
+        elif page == "Profile":
+            profile_page()
 
-else:
-    # Welcome screen
-    st.markdown("""
-    ## 🎮 Welcome to the Learn Module Tester!
-    
-    This application allows you to play through the Learn module scenarios interactively.
-    
-    ### How to Play:
-    1. Set your User ID and Scenario ID in the sidebar
-    2. Click "Start New Game" to begin
-    3. Read the scenario and make choices
-    4. Continue until you reach the end
-    
-    ### Features:
-    - 📖 Interactive story progression
-    - 🎭 Character trait tracking
-    - 🔮 Hidden insights for each choice
-    - 📊 Debug information available
-    
-    **Click "Start New Game" in the sidebar to begin!**
-    """)
-
-# Footer
-st.markdown("---")
-st.caption("🎭 Psychological Thriller Game - Learn Module Tester v1.0")
+if __name__ == "__main__":
+    main()

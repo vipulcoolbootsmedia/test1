@@ -1,0 +1,15 @@
+fastapi
+uvicorn[standard]
+mysql-connector-python
+python-dotenv
+python-jose[cryptography]
+passlib[bcrypt]
+python-multipart
+streamlit
+requests
+openai
+pandas
+plotly
+
+# Update these lines in requirements.txt
+bcrypt
