@@ -29,6 +29,12 @@ class Database:
             try:
                 yield cursor, connection
             finally:
+                # Make sure all results are consumed before closing
+                try:
+                    if cursor.with_rows:
+                        cursor.fetchall()
+                except:
+                    pass
                 cursor.close()
 
 db = Database()

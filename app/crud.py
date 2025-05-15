@@ -243,6 +243,9 @@ class GeneratedScenarioCRUD:
             """, (session_id, depth))
             
             result = cursor.fetchone()
+            # Make sure to fetch all results to avoid "Unread result found" error
+            cursor.fetchall()  # Consume any remaining results
+            
             if result:
                 result['scenario_json'] = json.loads(result['scenario_json'])
             return result
