@@ -1,31 +1,24 @@
-from pydantic import BaseModel
-from typing import List, Optional, Literal
+# This file is for SQLAlchemy models if you decide to use ORM later
+# For now, we're using direct SQL queries, so this can be empty or contain:
+
 from datetime import datetime
 
-class UserCreate(BaseModel):
-    username: str
+class UserInfo:
+    def __init__(self, userid, username, email, hashpassword, 
+                 game_history, trait_profile, created_at, game_played):
+        self.userid = userid
+        self.username = username
+        self.email = email
+        self.hashpassword = hashpassword
+        self.game_history = game_history
+        self.trait_profile = trait_profile
+        self.created_at = created_at
+        self.game_played = game_played
 
-class ScenarioResponse(BaseModel):
-    depth: int
-    narrative: str
-    choices: List[str]
-
-class ChoiceInput(BaseModel):
-    session_id: int
-    depth: int
-    choice_id: Literal["A", "B", "C"]
-    trait_impact: Literal["high", "moderate", "low"]
-
-class StartSession(BaseModel):
-    user_id: int
-    mode: Literal["learn", "grow"]
-
-class UpdateTraits(BaseModel):
-    user_id: int
-    trait_profile: dict
-
-class GenerateScenarioInput(BaseModel):
-    session_id: int
-    depth: int
-    narrative: str
-    choices: List[str]
+class GameSession:
+    def __init__(self, session_id, user_id, mode, scenario_id, started_at):
+        self.session_id = session_id
+        self.user_id = user_id
+        self.mode = mode
+        self.scenario_id = scenario_id
+        self.started_at = started_at
