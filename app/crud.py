@@ -27,7 +27,7 @@ class UserCRUD:
                 user_data.username,
                 user_data.email,
                 get_password_hash(user_data.password),
-                json.dumps(user_data.trait_profile),  # This should now work
+                json.dumps(user_data.trait_profile),
                 0,
                 json.dumps({}),
                 True
@@ -77,6 +77,45 @@ class UserCRUD:
             return {"message": "User updated successfully"}
     
     @staticmethod
+    def update_user_game_history(user_id: int, game_history_data: dict):
+        """Update user's game history JSON field"""
+        with db.get_cursor() as (cursor, connection):
+            cursor.execute("""
+                UPDATE user_info
+                SET game_history = %s
+                WHERE userid = %s
+            """, (json.dumps(game_history_data), user_id))
+            connection.commit()
+            return {"message": "Game history updated successfully"}
+    
+    @staticmethod
+    def update_user_traits(user_id: int, trait_updates: dict):
+        """Update specific user traits based on choices"""
+        with db.get_cursor() as (cursor, connection):
+            # Get current trait profile
+            cursor.execute("SELECT trait_profile FROM user_info WHERE userid = %s", (user_id,))
+            result = cursor.fetchone()
+            
+            if result and result[0]:
+                trait_profile = json.loads(result[0])
+                
+                # Update traits
+                for trait, change in trait_updates.items():
+                    if trait in trait_profile:
+                        # Ensure trait values stay within bounds (0-100)
+                        trait_profile[trait] = max(0, min(100, trait_profile[trait] + change))
+                
+                # Update in database
+                cursor.execute("""
+                    UPDATE user_info 
+                    SET trait_profile = %s 
+                    WHERE userid = %s
+                """, (json.dumps(trait_profile), user_id))
+                connection.commit()
+                return {"message": "Traits updated successfully"}
+            return {"error": "User not found or trait profile is empty"}
+    
+    @staticmethod
     def delete_user(user_id: int):
         with db.get_cursor() as (cursor, connection):
             # Soft delete - just mark as inactive
@@ -98,6 +137,18 @@ class UserCRUD:
                 LIMIT %s OFFSET %s
             """, (limit, skip))
             return cursor.fetchall()
+    
+    @staticmethod
+    def increment_games_played(user_id: int):
+        """Increment the games_played counter for a user"""
+        with db.get_cursor() as (cursor, connection):
+            cursor.execute("""
+                UPDATE user_info
+                SET game_played = game_played + 1
+                WHERE userid = %s
+            """, (user_id,))
+            connection.commit()
+            return {"message": "Games played counter incremented"}
 
 class SessionCRUD:
     @staticmethod
@@ -150,6 +201,33 @@ class SessionCRUD:
             query += " ORDER BY started_at DESC"
             cursor.execute(query, params)
             return cursor.fetchall()
+    
+    @staticmethod
+    def get_session_with_details(session_id: int):
+        """Get session with all related details for game history"""
+        with db.get_cursor(dictionary=True) as (cursor, connection):
+            # Get session info
+            cursor.execute("""
+                SELECT gs.*, u.username 
+                FROM game_session gs
+                JOIN user_info u ON gs.user_id = u.userid
+                WHERE gs.session_id = %s
+            """, (session_id,))
+            
+            session = cursor.fetchone()
+            if not session:
+                return None
+            
+            # Get choices
+            cursor.execute("""
+                SELECT * FROM user_choices
+                WHERE session_id = %s
+                ORDER BY depth, created_at
+            """, (session_id,))
+            
+            session['choices'] = cursor.fetchall()
+            
+            return session
 
 class ChoiceCRUD:
     @staticmethod
@@ -169,6 +247,28 @@ class ChoiceCRUD:
                 SELECT * FROM user_choices 
                 WHERE session_id = %s 
                 ORDER BY depth
+            """, (session_id,))
+            return cursor.fetchall()
+    
+    @staticmethod
+    def get_choice_details(session_id: int, depth: int):
+        """Get detailed information about a specific choice"""
+        with db.get_cursor(dictionary=True) as (cursor, connection):
+            cursor.execute("""
+                SELECT * FROM user_choices 
+                WHERE session_id = %s AND depth = %s
+            """, (session_id, depth))
+            return cursor.fetchone()
+    
+    @staticmethod
+    def get_choice_impacts(session_id: int):
+        """Get trait impacts from all choices in a session"""
+        with db.get_cursor(dictionary=True) as (cursor, connection):
+            cursor.execute("""
+                SELECT trait_impact, COUNT(*) as count
+                FROM user_choices 
+                WHERE session_id = %s
+                GROUP BY trait_impact
             """, (session_id,))
             return cursor.fetchall()
 
@@ -222,6 +322,16 @@ class ScenarioCRUD:
         with db.get_cursor(dictionary=True) as (cursor, connection):
             cursor.execute("SELECT scenario_id FROM scenario")
             return cursor.fetchall()
+    
+    @staticmethod
+    def get_scenario_metadata(scenario_id: int):
+        """Get the metadata for a scenario"""
+        with db.get_cursor(dictionary=True) as (cursor, connection):
+            cursor.execute("""
+                SELECT * FROM scenario_metadata
+                WHERE scenario_id = %s
+            """, (scenario_id,))
+            return cursor.fetchone()
 
 class GeneratedScenarioCRUD:
     @staticmethod
@@ -243,9 +353,6 @@ class GeneratedScenarioCRUD:
             """, (session_id, depth))
             
             result = cursor.fetchone()
-            # Make sure to fetch all results to avoid "Unread result found" error
-            cursor.fetchall()  # Consume any remaining results
-            
             if result:
                 result['scenario_json'] = json.loads(result['scenario_json'])
             return result
@@ -351,3 +458,123 @@ class AnalyticsCRUD:
             
             cursor.execute(query, params)
             return cursor.fetchall()
+    
+    @staticmethod
+    def record_session_analytics(session_id: int, analytics_data: dict):
+        """Record analytics for a completed session"""
+        with db.get_cursor() as (cursor, connection):
+            cursor.execute("""
+                INSERT INTO session_analytics 
+                (session_id, total_choices, average_response_time, trait_focus, trait_changes, session_score)
+                VALUES (%s, %s, %s, %s, %s, %s)
+            """, (
+                session_id,
+                analytics_data.get("total_choices", 0),
+                analytics_data.get("average_response_time", 0),
+                analytics_data.get("trait_focus", ""),
+                json.dumps(analytics_data.get("trait_changes", {})),
+                analytics_data.get("session_score", 0)
+            ))
+            connection.commit()
+            return {"id": cursor.lastrowid}
+    
+    @staticmethod
+    def get_user_progress_over_time(user_id: int):
+        """Get user trait progress over time through multiple sessions"""
+        with db.get_cursor(dictionary=True) as (cursor, connection):
+            cursor.execute("""
+                SELECT gs.session_id, gs.started_at, gs.ended_at, 
+                       JSON_EXTRACT(u.game_history, CONCAT('$.session_', gs.session_id, '.results.trait_changes')) as trait_changes
+                FROM game_session gs
+                JOIN user_info u ON gs.user_id = u.userid
+                WHERE gs.user_id = %s AND gs.is_completed = TRUE
+                ORDER BY gs.started_at
+            """, (user_id,))
+            
+            return cursor.fetchall()
+
+class AchievementCRUD:
+    @staticmethod
+    def list_achievements():
+        """List all available achievements"""
+        with db.get_cursor(dictionary=True) as (cursor, connection):
+            cursor.execute("SELECT * FROM achievements")
+            return cursor.fetchall()
+    
+    @staticmethod
+    def get_user_achievements(user_id: int):
+        """Get all achievements for a user"""
+        with db.get_cursor(dictionary=True) as (cursor, connection):
+            cursor.execute("""
+                SELECT a.*, ua.unlocked_at
+                FROM achievements a
+                JOIN user_achievements ua ON a.achievement_id = ua.achievement_id
+                WHERE ua.user_id = %s
+                ORDER BY ua.unlocked_at
+            """, (user_id,))
+            return cursor.fetchall()
+    
+    @staticmethod
+    def unlock_achievement(user_id: int, achievement_id: int):
+        """Unlock an achievement for a user"""
+        with db.get_cursor() as (cursor, connection):
+            # Check if already unlocked
+            cursor.execute("""
+                SELECT * FROM user_achievements
+                WHERE user_id = %s AND achievement_id = %s
+            """, (user_id, achievement_id))
+            
+            if cursor.fetchone():
+                return {"message": "Achievement already unlocked"}
+            
+            # Unlock achievement
+            cursor.execute("""
+                INSERT INTO user_achievements (user_id, achievement_id)
+                VALUES (%s, %s)
+            """, (user_id, achievement_id))
+            connection.commit()
+            return {"message": "Achievement unlocked"}
+    
+    @staticmethod
+    def check_achievement_eligibility(user_id: int):
+        """Check if user is eligible for any new achievements"""
+        with db.get_cursor(dictionary=True) as (cursor, connection):
+            # Get user stats
+            cursor.execute("""
+                SELECT game_played, trait_profile FROM user_info
+                WHERE userid = %s
+            """, (user_id,))
+            
+            user_stats = cursor.fetchone()
+            if not user_stats:
+                return {"eligible_achievements": []}
+            
+            # Get completed sessions
+            cursor.execute("""
+                SELECT COUNT(*) as completed_sessions FROM game_session
+                WHERE user_id = %s AND is_completed = TRUE
+            """, (user_id,))
+            
+            session_stats = cursor.fetchone()
+            
+            # Get already unlocked achievements
+            cursor.execute("""
+                SELECT achievement_id FROM user_achievements
+                WHERE user_id = %s
+            """, (user_id,))
+            
+            unlocked = [row["achievement_id"] for row in cursor.fetchall()]
+            
+            # Check achievements based on criteria
+            cursor.execute("""
+                SELECT * FROM achievements
+                WHERE achievement_id NOT IN (%s)
+            """, (",".join(map(str, unlocked)) if unlocked else "0"))
+            
+            eligible = []
+            for achievement in cursor.fetchall():
+                # This is where you'd implement logic for checking eligibility
+                # based on achievement criteria and user stats
+                pass
+            
+            return {"eligible_achievements": eligible}

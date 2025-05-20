@@ -4,6 +4,7 @@ from datetime import datetime
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
+import json
 
 # Configuration
 API_URL = "http://localhost:8000"
@@ -188,6 +189,13 @@ def learn_game_page():
         st.balloons()
         st.success("🎭 The End!")
         
+        # End session - Add this line to properly record game history
+        end_response = make_request("PATCH", f"/sessions/{st.session_state.session_id}/end", {"is_completed": True})
+        
+        # Optionally show a toast if you'd like to confirm session was saved
+        if end_response.status_code == 200:
+            st.toast("Session completed and saved!", icon="🎮")
+        
         if st.button("Return to Menu"):
             st.session_state.session_id = None
             st.session_state.current_scenario = None
@@ -309,6 +317,43 @@ def grow_game_page():
                 st.session_state.current_depth = depth + 1
                 st.session_state.current_scenario = None
                 st.rerun()
+# Helper function to create a preview of game history
+def create_history_preview(game_history, session_id):
+    """Create a preview of game history for a session"""
+    import json
+    
+    session_key = f"session_{session_id}"
+    if session_key in game_history:
+        session_data = game_history[session_key]
+        
+        # Create a simplified preview
+        preview = {}
+        
+        # Add session info if available
+        if "session_info" in session_data:
+            info = session_data["session_info"]
+            preview["duration"] = info.get("total_duration", "unknown")
+        
+        # Add choices summary
+        depth_keys = [k for k in session_data.keys() if k.startswith("depth")]
+        if depth_keys:
+            choices = []
+            for dk in sorted(depth_keys):
+                choice = session_data[dk].get("choice_taken", "")
+                if choice:
+                    choices.append(choice)
+            
+            preview["choices"] = "→".join(choices)
+        
+        # Add results if available
+        if "results" in session_data:
+            results = session_data["results"]
+            preview["score"] = results.get("session_score", 0)
+            preview["ending"] = results.get("ending_achieved", "unknown")
+        
+        return json.dumps(preview, indent=None)
+    
+    return "No history available"
 
 def analytics_page():
     """Analytics dashboard"""
@@ -317,6 +362,7 @@ def analytics_page():
     tab1, tab2, tab3 = st.tabs(["Personal Stats", "Leaderboard", "Game Analytics"])
     
     with tab1:
+        # Your existing code for user stats and trait profile...
         # Get user stats
         stats_response = make_request(
             "GET",
@@ -362,21 +408,39 @@ def analytics_page():
                     color_continuous_scale="Blues"
                 )
                 st.plotly_chart(fig)
+        
+        # Session history
+        st.subheader("Recent Sessions")
+        
+        # Get user's full profile with game history
+        user_response = make_request("GET", "/users/me")
+        
+        # Get sessions list
+        sessions_response = make_request(
+            "GET",
+            f"/sessions/user/{st.session_state.user['userid']}"
+        )
+        
+        if sessions_response.status_code == 200 and user_response.status_code == 200:
+            sessions = sessions_response.json()
+            user_data = user_response.json()
+            game_history = user_data.get("game_history", {})
             
-            # Session history
-            st.subheader("Recent Sessions")
-            sessions_response = make_request(
-                "GET",
-                f"/sessions/user/{st.session_state.user['userid']}"
-            )
-            
-            if sessions_response.status_code == 200:
-                sessions = sessions_response.json()
-                if sessions:
-                    sessions_df = pd.DataFrame(sessions)
-                    sessions_df["started_at"] = pd.to_datetime(sessions_df["started_at"])
-                    st.dataframe(sessions_df[["session_id", "mode", "started_at", "is_completed"]])
-    
+            if sessions:
+                # Create a dataframe for sessions
+                sessions_df = pd.DataFrame(sessions)
+                sessions_df["started_at"] = pd.to_datetime(sessions_df["started_at"])
+                
+                # Add full game history JSON column
+                sessions_df["game_history"] = sessions_df["session_id"].apply(
+                    lambda sid: json.dumps(game_history.get(f"session_{sid}", {}), indent=2)
+                )
+                
+                # Display the dataframe with the new column
+                st.dataframe(
+                    sessions_df[["session_id", "mode", "started_at", "is_completed", "game_history"]],
+                    use_container_width=True
+                )
     with tab2:
         # Leaderboard
         leaderboard_response = make_request("GET", "/analytics/leaderboard")

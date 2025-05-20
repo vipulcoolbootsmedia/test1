@@ -57,7 +57,8 @@ class UserResponse(UserBase):
     created_at: datetime
     is_active: bool
 
-# Session Schemas
+# In schemas.py, check if these models exist:
+
 class SessionCreate(BaseModel):
     mode: Literal["learn", "grow"]
     scenario_id: Optional[int] = None
@@ -70,7 +71,7 @@ class SessionResponse(BaseModel):
     started_at: datetime
     ended_at: Optional[datetime]
     is_completed: bool
-
+    
 # Learn Module Schemas
 class PathRequest(BaseModel):
     path: str = ""
