@@ -1,207 +1,200 @@
 from fastapi import APIRouter, Depends, HTTPException
 from schemas import GenerateScenarioRequest, ScenarioResponse, ChoiceInput
 from dependencies import get_current_active_user
-from crud import SessionCRUD, GeneratedScenarioCRUD, ChoiceCRUD, UserCRUD
-from database import db
+from crud import SessionCRUD, GeneratedScenarioCRUD, ChoiceCRUD
+from openai import OpenAI
 import os
 import json
 from typing import List
-import random
-
-# Only import OpenAI if available
-try:
-    from openai import OpenAI
-    client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-    OPENAI_AVAILABLE = True
-except Exception as e:
-    print(f"OpenAI not available: {e}")
-    OPENAI_AVAILABLE = False
 
 router = APIRouter(prefix="/grow", tags=["grow"])
 
-def generate_scenario_with_ai(depth: int, trait_focus: str, previous_choices: list):
-    """Generate scenario using OpenAI with enhanced prompting"""
+# Initialize OpenAI client
+client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+
+def generate_scenario_with_ai(depth: int, trait_focus: str, previous_choices: list, user_data: dict):
+    """Generate scenario using OpenAI with enhanced user context"""
     
-    # Create a more detailed context based on previous choices
-    choice_context = ""
-    if previous_choices:
-        choice_context = f"Previous actions: {', '.join(previous_choices)}. Build upon these choices."
+    # Extract user information
+    trait_profile = user_data.get("trait_profile", {})
+    game_history = user_data.get("game_history", {})
+    game_played = user_data.get("game_played", 0)
     
+    # Create trait analysis for the prompt
+    trait_analysis = ""
+    if trait_profile:
+        strongest_trait = max(trait_profile.items(), key=lambda x: x[1])
+        weakest_trait = min(trait_profile.items(), key=lambda x: x[1])
+        
+        trait_analysis = f"""
+        Player's Trait Profile:
+        - Strongest trait: {strongest_trait[0]} ({strongest_trait[1]}/100)
+        - Weakest trait: {weakest_trait[0]} ({weakest_trait[1]}/100)
+        - Current {trait_focus}: {trait_profile.get(trait_focus, 50)}/100
+        - Overall traits: {dict(sorted(trait_profile.items(), key=lambda x: x[1], reverse=True))}
+        """
+    
+    # Analyze game history patterns
+    history_analysis = ""
+    # if game_history:
+    #     choice_patterns = {"A": 0, "B": 0, "C": 0}
+    #     common_endings = []
+        
+    #     for session_key, session_data in game_history.items():
+    #         if isinstance(session_data, dict):
+    #             for depth_key, depth_data in session_data.items():
+    #                 if depth_key.startswith("depth") and isinstance(depth_data, dict):
+    #                     choice = depth_data.get("choice_taken", "")
+    #                     if choice in choice_patterns:
+    #                         choice_patterns[choice] += 1
+                
+    #             if "results" in session_data:
+    #                 ending = session_data["results"].get("ending_achieved", "")
+    #                 if ending:
+    #                     common_endings.append(ending)
+        
+    #     most_common_choice = max(choice_patterns.items(), key=lambda x: x[1])
+    #     choice_tendency = ""
+    #     if most_common_choice[0] == "A":
+    #         choice_tendency = "tends to choose bold, direct actions"
+    #     elif most_common_choice[0] == "B":
+    #         choice_tendency = "tends to choose balanced, moderate approaches"
+    #     elif most_common_choice[0] == "C":
+    #         choice_tendency = "tends to choose cautious, safe options"
+        
+    #     history_analysis = f"""
+    #     Player's Gaming History:
+    #     - Total games played: {game_played}
+    #     - Choice pattern: {choice_patterns} (player {choice_tendency})
+    #     - Recent endings achieved: {list(set(common_endings))[-3:] if common_endings else "None"}
+    #     - Experience level: {"Experienced" if game_played > 5 else "Intermediate" if game_played > 2 else "Beginner"}
+    #     """
+
     prompt = f"""
-    Create a unique psychological thriller scenario for depth {depth}/5.
+    You are creating a personalized psychological thriller scenario for a specific player.
     
-    Requirements:
-    1. Create a UNIQUE situation different from generic crossroads
-    2. Make it dark, psychological, and tense
-    3. Trait focus: {trait_focus}
-    4. {choice_context}
-    5. Choices should test {trait_focus} in different ways
-    6. Each choice should reveal something about the character's psychology
+    PLAYER CONTEXT:
+    {trait_analysis}
+    {history_analysis}
+    
+    CURRENT SESSION:
+    Depth: {depth}/5
+    Trait Focus: {trait_focus}
+    Previous Choices in This Session: {previous_choices}
+    
+    PERSONALIZATION GUIDELINES:
+    1. Consider the player's trait profile when crafting the scenario intensity
+    2. If this trait ({trait_focus}) is their weakness, create a gentler introduction
+    3. If this trait is their strength, challenge them with more complex moral dilemmas
+    4. Reference their choice patterns - if they're always cautious, present scenarios that reward boldness
+    5. Adapt difficulty based on their experience level ({game_played} games played)
+    6. Create narrative callbacks to their previous gaming patterns when appropriate
+    
+    Generate a scenario with:
+    1. A dark, psychological narrative (2-3 sentences) tailored to their experience level
+    2. Three choices (A, B, C) that test {trait_focus} at appropriate difficulty
+    3. Each choice should have different trait impact (high, moderate, low)
+    4. Consider their playing history - challenge their typical patterns
     
     Return ONLY valid JSON in this exact format:
     {{
         "depth": {depth},
         "scene_narrative": [
-            {{"text": "First descriptive sentence about the unique situation", "sfx": "appropriate_sound"}},
-            {{"text": "Second sentence building tension", "sfx": "another_sound"}}
+            {{"text": "First sentence adapted to player's profile", "sfx": "sound_effect"}},
+            {{"text": "Second sentence that challenges their patterns", "sfx": "sound_effect"}}
         ],
-        "narrative_purpose": "What psychological aspect this tests",
+        "narrative_purpose": "Why this scenario fits this specific player",
+        "personalization_notes": "How this scenario is tailored to their profile",
         "choices": [
             {{
                 "choice_id": "A",
-                "choice_text": "First option (tests {trait_focus} highly)",
+                "choice_text": "Choice description (consider their typical patterns)",
                 "maps_to_trait_details": {{
                     "trait": "{trait_focus}",
                     "degree": "high"
                 }},
-                "short_hidden_message": "What this reveals about the player"
+                "short_hidden_message": "Psychological insight based on their profile"
             }},
             {{
-                "choice_id": "B",
-                "choice_text": "Second option (moderate {trait_focus})",
+                "choice_id": "B", 
+                "choice_text": "Moderate choice adapted to their experience",
                 "maps_to_trait_details": {{
                     "trait": "{trait_focus}",
                     "degree": "moderate"
                 }},
-                "short_hidden_message": "What this reveals about the player"
+                "short_hidden_message": "Insight reflecting their gaming history"
             }},
             {{
                 "choice_id": "C",
-                "choice_text": "Third option (low {trait_focus})",
+                "choice_text": "Choice that challenges their usual pattern",
                 "maps_to_trait_details": {{
                     "trait": "{trait_focus}",
                     "degree": "low"
                 }},
-                "short_hidden_message": "What this reveals about the player"
+                "short_hidden_message": "Counter to their typical behavior"
             }}
         ],
-        "is_end": {"true" if depth == 5 else "false"}
+        "is_end": {str(depth == 5).lower()}
     }}
     """
     
     try:
-        if OPENAI_AVAILABLE:
-            response = client.chat.completions.create(
-                model="gpt-3.5-turbo",
-                messages=[
-                    {"role": "system", "content": "You are a creative writer for psychological thriller games. Return only valid JSON in the exact format requested."},
-                    {"role": "user", "content": prompt}
-                ],
-                temperature=0.9,
-                max_tokens=1500
-            )
-            
-            # Get the response content
-            output_text = response.choices[0].message.content
-            
-            # Remove markdown code block if present
-            if output_text.startswith("```json"):
-                output_text = output_text[7:]  # Remove ```json
-            if output_text.startswith("```"):
-                output_text = output_text[3:]  # Remove ```
-            if output_text.endswith("```"):
-                output_text = output_text[:-3]  # Remove trailing ```
-                
-            # Extract JSON from response
-            json_start = output_text.find('{')
-            json_end = output_text.rfind('}') + 1
-            if json_start >= 0 and json_end > json_start:
-                json_text = output_text[json_start:json_end]
-                scenario_json = json.loads(json_text)
-            else:
-                # Try parsing the entire response as JSON
-                scenario_json = json.loads(output_text.strip())
-            
-            # Validate the structure
-            required_keys = ["depth", "scene_narrative", "choices", "is_end"]
-            if all(key in scenario_json for key in required_keys):
-                print(f"Successfully generated scenario for depth {depth}")
-                return scenario_json
-            else:
-                raise ValueError(f"Invalid scenario structure. Missing keys: {[key for key in required_keys if key not in scenario_json]}")
+        response = client.chat.completions.create(
+            model="gpt-3.5-turbo-16k",
+            messages=[
+                {
+                    "role": "system", 
+                    "content": "You are an expert psychological thriller writer who creates personalized gaming experiences. Always return valid JSON only."
+                },
+                {"role": "user", "content": prompt}
+            ],
+            temperature=0.8,
+            max_tokens=1500
+        )
+        
+        scenario_json = json.loads(response.choices[0].message.content)
+        
+        # Validate the structure
+        required_keys = ["depth", "scene_narrative", "choices", "is_end"]
+        if all(key in scenario_json for key in required_keys):
+            print(f"Generated personalized scenario for depth {depth}, trait: {trait_focus}")
+            return scenario_json
         else:
-            print("OpenAI not available, using fallback")
-            return get_fallback_scenario(depth, trait_focus)
+            raise ValueError("Invalid scenario structure from AI")
             
     except Exception as e:
         print(f"AI generation error: {e}")
-        # Enhanced fallback scenarios based on depth
-        return get_fallback_scenario(depth, trait_focus)
-
-def get_fallback_scenario(depth: int, trait_focus: str):
-    """Get unique fallback scenarios for each depth"""
-    scenarios = {
-        1: {
-            "scene": "You wake up in a dimly lit room with no memory of how you got here. The walls seem to breathe, and somewhere in the darkness, a clock ticks irregularly.",
-            "sfx": ["heartbeat", "dripping_water"],
+        # Simple fallback scenario
+        return {
+            "depth": depth,
+            "scene_narrative": [
+                {"text": f"You face a challenging situation that tests your {trait_focus}.", "sfx": "tension"},
+                {"text": "The choice you make will reveal something important about yourself.", "sfx": "heartbeat"}
+            ],
+            "narrative_purpose": f"Testing {trait_focus} for an experienced player",
+            "personalization_notes": f"Adapted for {game_played} games played",
             "choices": [
-                ("Search for a way out immediately", "Your {trait} drives you to act quickly"),
-                ("Examine the room carefully first", "Your measured approach shows moderate {trait}"),
-                ("Call out for help", "You prefer to rely on others rather than your own {trait}")
-            ]
-        },
-        2: {
-            "scene": "A stranger approaches you with an urgent message about your past. Their face shifts and changes as they speak, never quite settling on one form.",
-            "sfx": ["footsteps", "whisper"],
-            "choices": [
-                ("Confront them directly about what they know", "Your {trait} compels you to face the truth"),
-                ("Listen cautiously while planning escape", "You balance {trait} with caution"),
-                ("Refuse to engage and walk away", "You avoid situations that test your {trait}")
-            ]
-        },
-        3: {
-            "scene": "You discover a hidden journal with disturbing entries in your handwriting. The pages turn themselves, revealing truths you don't remember writing.",
-            "sfx": ["page_turning", "clock_ticking"],
-            "choices": [
-                ("Read every entry despite the horror", "Your {trait} drives you to know everything"),
-                ("Read selected pages carefully", "You approach with moderate {trait}"),
-                ("Burn the journal immediately", "You reject challenges to your {trait}")
-            ]
-        },
-        4: {
-            "scene": "Three doors appear before you, each showing a different version of your future. The visions shift and writhe, each more disturbing than the last.",
-            "sfx": ["door_creak", "echoing_voices"],
-            "choices": [
-                ("Enter the door showing greatest challenge", "Maximum {trait} guides your choice"),
-                ("Choose the balanced middle path", "You moderate your {trait}"),
-                ("Select the safest looking option", "You minimize the need for {trait}")
-            ]
-        },
-        5: {
-            "scene": "The truth about everything is finally revealed in a shocking confrontation. Reality itself seems to fracture as you face your deepest fears.",
-            "sfx": ["dramatic_music", "revelation"],
-            "choices": [
-                ("Face the complete truth head-on", "Your {trait} defines who you are"),
-                ("Accept parts while questioning others", "You've learned to balance {trait}"),
-                ("Reject the revelation entirely", "You choose comfort over {trait}")
-            ]
-        }
-    }
-    
-    scenario_data = scenarios.get(depth, scenarios[1])
-    scene_parts = scenario_data["scene"].split(". ")
-    
-    return {
-        "depth": depth,
-        "scene_narrative": [
-            {"text": scene_parts[0] + ".", "sfx": scenario_data["sfx"][0]},
-            {"text": scene_parts[1] if len(scene_parts) > 1 else "The tension builds.", "sfx": scenario_data["sfx"][1]}
-        ],
-        "narrative_purpose": f"Testing {trait_focus} through increasingly complex moral choices",
-        "choices": [
-            {
-                "choice_id": chr(65 + i),  # A, B, C
-                "choice_text": choice[0],
-                "maps_to_trait_details": {
-                    "trait": trait_focus,
-                    "degree": ["high", "moderate", "low"][i]
+                {
+                    "choice_id": "A",
+                    "choice_text": f"Face the challenge head-on",
+                    "maps_to_trait_details": {"trait": trait_focus, "degree": "high"},
+                    "short_hidden_message": f"You push your {trait_focus} to its limits"
                 },
-                "short_hidden_message": choice[1].format(trait=trait_focus)
-            }
-            for i, choice in enumerate(scenario_data["choices"])
-        ],
-        "is_end": depth == 5
-    }
+                {
+                    "choice_id": "B",
+                    "choice_text": f"Take a measured approach",
+                    "maps_to_trait_details": {"trait": trait_focus, "degree": "moderate"},
+                    "short_hidden_message": f"You balance {trait_focus} with wisdom"
+                },
+                {
+                    "choice_id": "C",
+                    "choice_text": f"Choose the safer option",
+                    "maps_to_trait_details": {"trait": trait_focus, "degree": "low"},
+                    "short_hidden_message": f"You prioritize safety over {trait_focus}"
+                }
+            ],
+            "is_end": depth == 5
+        }
 
 @router.post("/scenario/{session_id}/generate", response_model=dict)
 async def generate_scenario(
@@ -209,7 +202,7 @@ async def generate_scenario(
     request: GenerateScenarioRequest,
     current_user: dict = Depends(get_current_active_user)
 ):
-    """Generate a new scenario for grow mode"""
+    """Generate a personalized scenario for grow mode"""
     session = SessionCRUD.get_session(session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
@@ -220,23 +213,22 @@ async def generate_scenario(
     if session["mode"] != "grow":
         raise HTTPException(status_code=400, detail="Not a grow session")
     
-    # Get user's trait profile to potentially influence generation
-    user_traits = current_user.get("trait_profile", {})
+    # Prepare user data for personalization
+    user_data = {
+        "trait_profile": current_user.get("trait_profile", {}),
+        "game_history": current_user.get("game_history", {}),
+        "game_played": current_user.get("game_played", 0),
+        "username": current_user.get("username", "Player")
+    }
     
-    # You could vary trait focus based on user's lowest traits
-    if not request.trait_focus:
-        if user_traits:
-            # Find the lowest trait
-            lowest_trait = min(user_traits.items(), key=lambda x: x[1])[0]
-            request.trait_focus = lowest_trait
-        else:
-            request.trait_focus = "bravery"
+    print(f"Generating personalized scenario for {user_data['username']} - Game #{user_data['game_played'] + 1}")
     
-    # Generate scenario using AI
+    # Generate personalized scenario using AI
     scenario = generate_scenario_with_ai(
         request.depth,
         request.trait_focus,
-        request.previous_choices
+        request.previous_choices,
+        user_data
     )
     
     # Save to database
@@ -292,47 +284,9 @@ async def record_choice(
         choice.trait_impact
     )
     
-    # Get the scenario to find which trait was being tested
-    scenario = GeneratedScenarioCRUD.get_generated_scenario(session_id, choice.depth)
-    if scenario and scenario.get('scenario_json'):
-        # Extract trait from the scenario's choices
-        for scenario_choice in scenario['scenario_json'].get('choices', []):
-            if scenario_choice['choice_id'] == choice.choice_id:
-                trait_name = scenario_choice['maps_to_trait_details']['trait']
-                _update_user_traits(current_user["userid"], trait_name, choice.trait_impact)
-                break
+    print(f"Recorded choice {choice.choice_id} for user {current_user['username']} at depth {choice.depth}")
     
     return result
-
-def _update_user_traits(user_id: int, trait_name: str, impact: str):
-    """Update specific user trait based on choice"""
-    impact_values = {
-        "high": 8,
-        "moderate": 4,
-        "low": 1
-    }
-    
-    with db.get_cursor() as (cursor, connection):
-        # Get current trait profile
-        cursor.execute("SELECT trait_profile FROM user_info WHERE userid = %s", (user_id,))
-        result = cursor.fetchone()
-        
-        if result and result[0]:
-            trait_profile = json.loads(result[0])
-            
-            # Update specific trait
-            if trait_name in trait_profile:
-                current_value = trait_profile[trait_name]
-                new_value = min(100, current_value + impact_values.get(impact, 0))
-                trait_profile[trait_name] = new_value
-            
-            # Update in database
-            cursor.execute("""
-                UPDATE user_info 
-                SET trait_profile = %s 
-                WHERE userid = %s
-            """, (json.dumps(trait_profile), user_id))
-            connection.commit()
 
 @router.get("/scenarios/{session_id}", response_model=list)
 async def get_all_scenarios(
