@@ -5,10 +5,87 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 import json
+import os
+from dotenv import load_dotenv
 
-# Configuration
-API_URL = "http://localhost:8000"
+# Load environment variables from .env file
+load_dotenv()
 
+# Get API URL from environment variables, with fallback to localhost
+API_URL = os.getenv("API_URL", "http://localhost:8000")
+
+def make_request(method, endpoint, data=None, token=None):
+    """Make request to API with improved debugging and error handling"""
+    url = f"{API_URL}{endpoint}"
+    
+    print(f"Making {method} request to: {url}")  # Debug print
+    
+    headers = {}
+    if token:
+        # Ensure token has the Bearer prefix
+        if not token.startswith("Bearer "):
+            headers["Authorization"] = f"Bearer {token}"
+        else:
+            headers["Authorization"] = token
+        # Print first 10 chars of token for debugging
+        print(f"Using token: {headers['Authorization'][:15]}...")
+    
+    try:
+        if method == "GET":
+            response = requests.get(url, headers=headers, timeout=10)
+        elif method == "POST":
+            response = requests.post(url, json=data, headers=headers, timeout=10)
+        elif method == "PATCH":
+            response = requests.patch(url, json=data, headers=headers, timeout=10)
+        elif method == "PUT":
+            response = requests.put(url, json=data, headers=headers, timeout=10)
+        elif method == "DELETE":
+            response = requests.delete(url, headers=headers, timeout=10)
+        else:
+            st.error(f"Unsupported method: {method}")
+            return None
+        
+        # Debug response info
+        print(f"Response status: {response.status_code}")
+        
+        # Log detailed info for non-200 responses
+        if response.status_code >= 400:
+            print(f"Error response: {response.text[:200]}...")
+            
+            # Handle common errors with user-friendly messages
+            if response.status_code == 401:
+                st.warning("Your session has expired. Please log in again.")
+                # Clear token on 401 to force re-login
+                if 'token' in st.session_state:
+                    del st.session_state.token
+            elif response.status_code == 403:
+                st.error("You don't have permission to access this resource.")
+            elif response.status_code == 404:
+                st.error("The requested resource was not found.")
+            elif response.status_code == 422:
+                st.error("Validation error - please check your input.")
+            elif response.status_code >= 500:
+                st.error("Server error. Please try again later.")
+        
+        return response
+        
+    except requests.exceptions.ConnectionError as e:
+        print(f"Connection error details: {str(e)}")  # Detailed logging
+        st.error(f"Failed to connect to API at {url}. Please make sure the API server is running.")
+        return None
+    except requests.exceptions.Timeout as e:
+        print(f"Timeout error details: {str(e)}")  # Detailed logging
+        st.error("API request timed out. The server may be experiencing high load.")
+        return None
+    except requests.exceptions.RequestException as e:
+        print(f"Request error details: {str(e)}")  # Detailed logging
+        st.error(f"Request error: {str(e)}")
+        return None
+    except Exception as e:
+        print(f"Unexpected error: {str(e)}")  # Detailed logging
+        st.error(f"Unexpected error: {str(e)}")
+        return None
+    
 # Initialize session state
 if 'token' not in st.session_state:
     st.session_state.token = None
@@ -23,24 +100,6 @@ if 'current_scenario' not in st.session_state:
 if 'game_mode' not in st.session_state:
     st.session_state.game_mode = None
 
-def make_request(method, endpoint, data=None, params=None):
-    """Make API request with authentication"""
-    headers = {}
-    if st.session_state.token:
-        headers["Authorization"] = f"Bearer {st.session_state.token}"
-    
-    url = f"{API_URL}{endpoint}"
-    
-    if method == "GET":
-        response = requests.get(url, headers=headers, params=params)
-    elif method == "POST":
-        response = requests.post(url, json=data, headers=headers)
-    elif method == "PATCH":
-        response = requests.patch(url, json=data, headers=headers)
-    elif method == "DELETE":
-        response = requests.delete(url, headers=headers)
-    
-    return response
 
 def login_page():
     """Login/Register page"""
@@ -54,27 +113,48 @@ def login_page():
             password = st.text_input("Password", type="password")
             
             if st.form_submit_button("Login"):
+                # Fixed: Using the correct API format for token login
                 response = requests.post(
                     f"{API_URL}/auth/login",
-                    data={"username": username, "password": password}
+                    # For OAuth2, the correct format is form data, not JSON
+                    data={
+                        "username": username, 
+                        "password": password
+                    },
+                    headers={
+                        "Content-Type": "application/x-www-form-urlencoded"
+                    }
                 )
                 
                 if response.status_code == 200:
                     data = response.json()
+                    # Store the token properly
                     st.session_state.token = data["access_token"]
+                    print(f"Token received and stored: {data['access_token'][:10]}...")
                     
-                    # Get user info
-                    user_response = make_request("GET", "/users/me")
-                    if user_response.status_code == 200:
+                    # Get user info with the token
+                    user_response = make_request(
+                        "GET", 
+                        "/users/me",
+                        token=data["access_token"]  # Pass token explicitly
+                    )
+                    
+                    if user_response and user_response.status_code == 200:
                         st.session_state.user = user_response.json()
                         st.success("Login successful!")
                         st.rerun()
+                    else:
+                        st.error("Could not retrieve user profile.")
                 else:
-                    st.error("Invalid credentials")
-
-        
-    # In streamlit_app.py, update the registration error handling:
-
+                    error_msg = "Invalid credentials"
+                    try:
+                        error_data = response.json()
+                        if "detail" in error_data:
+                            error_msg = error_data["detail"]
+                    except:
+                        pass
+                    st.error(error_msg)
+    
     with tab2:
         with st.form("register_form"):
             username = st.text_input("Username")
@@ -92,15 +172,15 @@ def login_page():
                         "password": password
                     })
                     
-                    if response.status_code == 200:
+                    if response and response.status_code == 200:
                         st.success("Registration successful! Please login.")
                     else:
                         # Better error handling
                         try:
                             error_detail = response.json().get("detail", "Registration failed")
+                            st.error(error_detail)
                         except:
-                            error_detail = f"Registration failed: {response.status_code}"
-                        st.error(error_detail)
+                            st.error(f"Registration failed: {response.status_code if response else 'Connection error'}")
 
 def game_selection_page():
     """Game mode selection page"""
@@ -113,8 +193,8 @@ def game_selection_page():
         st.write("Play through carefully crafted scenarios designed to test specific traits.")
         
         # Get available scenarios
-        scenarios_response = make_request("GET", "/learn/scenarios")
-        if scenarios_response.status_code == 200:
+        scenarios_response = make_request("GET", "/learn/scenarios", token=st.session_state.token)
+        if scenarios_response and scenarios_response.status_code == 200:
             scenarios = scenarios_response.json()
             scenario_id = st.selectbox(
                 "Select Scenario",
@@ -124,12 +204,17 @@ def game_selection_page():
             
             if st.button("Start Learn Mode"):
                 # Create session
-                session_response = make_request("POST", "/sessions/", {
-                    "mode": "learn",
-                    "scenario_id": scenario_id
-                })
+                session_response = make_request(
+                    "POST", 
+                    "/sessions/", 
+                    {
+                        "mode": "learn",
+                        "scenario_id": scenario_id
+                    },
+                    token=st.session_state.token
+                )
                 
-                if session_response.status_code == 200:
+                if session_response and session_response.status_code == 200:
                     st.session_state.session_id = session_response.json()["session_id"]
                     st.session_state.game_mode = "learn"
                     st.session_state.current_path = ""
@@ -146,11 +231,16 @@ def game_selection_page():
         
         if st.button("Start Grow Mode"):
             # Create session
-            session_response = make_request("POST", "/sessions/", {
-                "mode": "grow"
-            })
+            session_response = make_request(
+                "POST", 
+                "/sessions/", 
+                {
+                    "mode": "grow"
+                },
+                token=st.session_state.token
+            )
             
-            if session_response.status_code == 200:
+            if session_response and session_response.status_code == 200:
                 st.session_state.session_id = session_response.json()["session_id"]
                 st.session_state.game_mode = "grow"
                 st.session_state.trait_focus = trait_focus
@@ -164,10 +254,11 @@ def learn_game_page():
         # Get starting scenario
         response = make_request(
             "GET",
-            f"/learn/scenario/{st.session_state.session_id}/start"
+            f"/learn/scenario/{st.session_state.session_id}/start",
+            token=st.session_state.token
         )
         
-        if response.status_code == 200:
+        if response and response.status_code == 200:
             st.session_state.current_scenario = response.json()
         else:
             st.error("Failed to load scenario")
@@ -190,10 +281,15 @@ def learn_game_page():
         st.success("🎭 The End!")
         
         # End session - Add this line to properly record game history
-        end_response = make_request("PATCH", f"/sessions/{st.session_state.session_id}/end", {"is_completed": True})
+        end_response = make_request(
+            "PATCH", 
+            f"/sessions/{st.session_state.session_id}/end", 
+            {"is_completed": True},
+            token=st.session_state.token
+        )
         
         # Optionally show a toast if you'd like to confirm session was saved
-        if end_response.status_code == 200:
+        if end_response and end_response.status_code == 200:
             st.toast("Session completed and saved!", icon="🎮")
         
         if st.button("Return to Menu"):
@@ -221,7 +317,8 @@ def learn_game_page():
                         "depth": scenario["depth"],
                         "choice_id": choice["choice_id"],
                         "trait_impact": trait_info.get("degree", "moderate")
-                    }
+                    },
+                    token=st.session_state.token
                 )
                 
                 # Update path and get next scenario
@@ -230,10 +327,11 @@ def learn_game_page():
                 response = make_request(
                     "POST",
                     f"/learn/scenario/{st.session_state.session_id}/by-path",
-                    {"path": st.session_state.current_path}
+                    {"path": st.session_state.current_path},
+                    token=st.session_state.token
                 )
                 
-                if response.status_code == 200:
+                if response and response.status_code == 200:
                     st.session_state.current_scenario = response.json()
                     st.rerun()
 
@@ -253,10 +351,11 @@ def grow_game_page():
                     "depth": depth,
                     "trait_focus": st.session_state.get("trait_focus", "bravery"),
                     "previous_choices": st.session_state.get("previous_choices", [])
-                }
+                },
+                token=st.session_state.token
             )
             
-            if response.status_code == 200:
+            if response and response.status_code == 200:
                 data = response.json()
                 st.session_state.current_scenario = data["scenario"]
             else:
@@ -280,7 +379,12 @@ def grow_game_page():
         st.success("🎭 The End!")
         
         # End session
-        make_request("PATCH", f"/sessions/{st.session_state.session_id}/end", {"is_completed": True})
+        make_request(
+            "PATCH", 
+            f"/sessions/{st.session_state.session_id}/end", 
+            {"is_completed": True},
+            token=st.session_state.token
+        )
         
         if st.button("Return to Menu"):
             st.session_state.session_id = None
@@ -307,7 +411,8 @@ def grow_game_page():
                         "depth": scenario["depth"],
                         "choice_id": choice["choice_id"],
                         "trait_impact": trait_info.get("degree", "moderate")
-                    }
+                    },
+                    token=st.session_state.token
                 )
                 
                 # Update state for next scenario
@@ -317,6 +422,7 @@ def grow_game_page():
                 st.session_state.current_depth = depth + 1
                 st.session_state.current_scenario = None
                 st.rerun()
+
 # Helper function to create a preview of game history
 def create_history_preview(game_history, session_id):
     """Create a preview of game history for a session"""
@@ -362,14 +468,14 @@ def analytics_page():
     tab1, tab2, tab3 = st.tabs(["Personal Stats", "Leaderboard", "Game Analytics"])
     
     with tab1:
-        # Your existing code for user stats and trait profile...
         # Get user stats
         stats_response = make_request(
             "GET",
-            f"/analytics/user/{st.session_state.user['userid']}/stats"
+            f"/analytics/user/{st.session_state.user['userid']}/stats",
+            token=st.session_state.token
         )
         
-        if stats_response.status_code == 200:
+        if stats_response and stats_response.status_code == 200:
             stats = stats_response.json()
             
             col1, col2, col3 = st.columns(3)
@@ -413,15 +519,16 @@ def analytics_page():
         st.subheader("Recent Sessions")
         
         # Get user's full profile with game history
-        user_response = make_request("GET", "/users/me")
+        user_response = make_request("GET", "/users/me", token=st.session_state.token)
         
         # Get sessions list
         sessions_response = make_request(
             "GET",
-            f"/sessions/user/{st.session_state.user['userid']}"
+            f"/sessions/user/{st.session_state.user['userid']}",
+            token=st.session_state.token
         )
         
-        if sessions_response.status_code == 200 and user_response.status_code == 200:
+        if sessions_response and sessions_response.status_code == 200 and user_response and user_response.status_code == 200:
             sessions = sessions_response.json()
             user_data = user_response.json()
             game_history = user_data.get("game_history", {})
@@ -441,11 +548,12 @@ def analytics_page():
                     sessions_df[["session_id", "mode", "started_at", "is_completed", "game_history"]],
                     use_container_width=True
                 )
+    
     with tab2:
         # Leaderboard
-        leaderboard_response = make_request("GET", "/analytics/leaderboard")
+        leaderboard_response = make_request("GET", "/analytics/leaderboard", token=st.session_state.token)
         
-        if leaderboard_response.status_code == 200:
+        if leaderboard_response and leaderboard_response.status_code == 200:
             leaderboard = leaderboard_response.json()
             
             if leaderboard:
@@ -481,9 +589,9 @@ def analytics_page():
         # Choice analytics
         st.subheader("Choice Distribution")
         
-        choices_response = make_request("GET", "/analytics/choices/distribution")
+        choices_response = make_request("GET", "/analytics/choices/distribution", token=st.session_state.token)
         
-        if choices_response.status_code == 200:
+        if choices_response and choices_response.status_code == 200:
             choices = choices_response.json()
             
             if choices:
@@ -549,14 +657,15 @@ def profile_page():
             response = make_request(
                 "PATCH",
                 f"/users/{user['userid']}",
-                {"email": new_email}
+                {"email": new_email},
+                token=st.session_state.token
             )
             
-            if response.status_code == 200:
+            if response and response.status_code == 200:
                 st.success("Profile updated successfully")
                 # Refresh user data
-                user_response = make_request("GET", "/users/me")
-                if user_response.status_code == 200:
+                user_response = make_request("GET", "/users/me", token=st.session_state.token)
+                if user_response and user_response.status_code == 200:
                     st.session_state.user = user_response.json()
                     st.rerun()
 
@@ -572,6 +681,17 @@ def main():
     if not st.session_state.token:
         login_page()
         return
+    
+    # Get user info if we have token but no user data
+    if st.session_state.token and not st.session_state.user:
+        user_response = make_request("GET", "/users/me", token=st.session_state.token)
+        if user_response and user_response.status_code == 200:
+            st.session_state.user = user_response.json()
+        else:
+            # Token is invalid or expired, clear it and show login page
+            st.session_state.token = None
+            login_page()
+            return
     
     # Sidebar navigation
     with st.sidebar:
@@ -591,7 +711,8 @@ def main():
                         make_request(
                             "PATCH",
                             f"/sessions/{st.session_state.session_id}/end",
-                            {"is_completed": False}
+                            {"is_completed": False},
+                            token=st.session_state.token
                         )
                     
                     # Reset game state
@@ -599,8 +720,10 @@ def main():
                     st.session_state.current_scenario = None
                     st.session_state.game_mode = None
                     st.session_state.current_path = ""
-                    st.session_state.current_depth = 1
-                    st.session_state.previous_choices = []
+                    if "current_depth" in st.session_state:
+                        st.session_state.current_depth = 1
+                    if "previous_choices" in st.session_state:
+                        st.session_state.previous_choices = []
                     st.rerun()
         else:
             # Main menu navigation
@@ -611,7 +734,8 @@ def main():
             
             if page == "Logout":
                 if st.button("Confirm Logout"):
-                    for key in st.session_state.keys():
+                    # Clear all session state
+                    for key in list(st.session_state.keys()):
                         del st.session_state[key]
                     st.rerun()
     
