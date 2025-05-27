@@ -461,11 +461,39 @@ def create_history_preview(game_history, session_id):
     
     return "No history available"
 
+def display_recent_game_story():
+    """Display the most recent game story in the profile"""
+    user_response = make_request("GET", "/users/me", token=st.session_state.token)
+    
+    if user_response and user_response.status_code == 200:
+        user_data = user_response.json()
+        game_history = user_data.get("game_history", {})
+        
+        if game_history:
+            # Get most recent session
+            session_keys = sorted(
+                [k for k in game_history.keys() if k.startswith("session_")],
+                key=lambda x: game_history[x].get("session_info", {}).get("started_at", ""),
+                reverse=True
+            )
+            
+            if session_keys:
+                recent_session = game_history[session_keys[0]]
+                results = recent_session.get("results", {})
+                
+                if results.get("game_summary"):
+                    st.subheader("📖 Your Latest Story")
+                    st.markdown(f"*{results['game_summary']}*")
+                    
+                    # Show ending achieved
+                    if results.get("ending_achieved"):
+                        st.success(f"🏆 Latest Achievement: {results['ending_achieved']}")
+
 def analytics_page():
-    """Analytics dashboard"""
+    """Analytics dashboard with enhanced game summary display"""
     st.title("📊 Analytics Dashboard")
     
-    tab1, tab2, tab3 = st.tabs(["Personal Stats", "Leaderboard", "Game Analytics"])
+    tab1, tab2, tab3, tab4 = st.tabs(["Personal Stats", "Game Stories", "Leaderboard", "Game Analytics"])
     
     with tab1:
         # Get user stats
@@ -550,6 +578,90 @@ def analytics_page():
                 )
     
     with tab2:
+        # NEW TAB: Game Stories - Display AI-generated summaries
+        st.subheader("🎭 Your Psychological Journey Stories")
+        st.write("AI-generated narratives of your gameplay sessions")
+        
+        # Get user's full profile with game history
+        user_response = make_request("GET", "/users/me", token=st.session_state.token)
+        
+        if user_response and user_response.status_code == 200:
+            user_data = user_response.json()
+            game_history = user_data.get("game_history", {})
+            
+            if game_history:
+                # Sort sessions by most recent first
+                session_keys = sorted(
+                    [k for k in game_history.keys() if k.startswith("session_")],
+                    key=lambda x: game_history[x].get("session_info", {}).get("started_at", ""),
+                    reverse=True
+                )
+                
+                for session_key in session_keys:
+                    session_data = game_history[session_key]
+                    session_info = session_data.get("session_info", {})
+                    results = session_data.get("results", {})
+                    
+                    # Create an expandable section for each session
+                    with st.expander(
+                        f"🎮 {session_info.get('mode', 'Unknown').title()} Session - {results.get('ending_achieved', 'Unknown Ending')} ({session_info.get('total_duration', 'Unknown duration')})",
+                        expanded=False
+                    ):
+                        col1, col2 = st.columns([2, 1])
+                        
+                        with col1:
+                            # Display AI-generated game summary
+                            if results.get("game_summary"):
+                                st.markdown("### 📖 Your Story")
+                                st.markdown(f"*{results['game_summary']}*")
+                            else:
+                                st.info("No AI summary available for this session")
+                        
+                        with col2:
+                            # Display session stats
+                            st.markdown("### 📊 Session Stats")
+                            st.metric("Score", results.get("session_score", 0))
+                            st.metric("Duration", session_info.get("total_duration", "Unknown"))
+                            
+                            # Trait changes
+                            trait_changes = results.get("trait_changes", {})
+                            if trait_changes:
+                                st.markdown("**Trait Changes:**")
+                                for trait, change in trait_changes.items():
+                                    st.write(f"• {trait.capitalize()}: {change}")
+                        
+                        # Show choice progression
+                        st.markdown("### 🎯 Choice Progression")
+                        depth_keys = sorted([k for k in session_data.keys() if k.startswith("depth")])
+                        
+                        choice_summary = []
+                        for depth_key in depth_keys:
+                            depth_data = session_data[depth_key]
+                            choice_taken = depth_data.get("choice_taken")
+                            if choice_taken:
+                                # Find the choice details
+                                chosen_choice = None
+                                for choice in depth_data.get("choices", []):
+                                    if choice["choice_id"] == choice_taken:
+                                        chosen_choice = choice
+                                        break
+                                
+                                if chosen_choice:
+                                    choice_summary.append({
+                                        "depth": depth_key.replace("depth", "Depth "),
+                                        "choice": f"{choice_taken}: {chosen_choice['choice_text'][:60]}...",
+                                        "impact": chosen_choice.get("maps_to_trait_details", {}).get("degree", "unknown")
+                                    })
+                        
+                        if choice_summary:
+                            choice_df = pd.DataFrame(choice_summary)
+                            st.dataframe(choice_df, use_container_width=True, hide_index=True)
+                        
+                        st.markdown("---")
+            else:
+                st.info("No game sessions found. Play some games to see your stories here!")
+    
+    with tab3:
         # Leaderboard
         leaderboard_response = make_request("GET", "/analytics/leaderboard", token=st.session_state.token)
         
@@ -585,7 +697,7 @@ def analytics_page():
                     columns_to_show.append("dominant_trait")
                 st.dataframe(df[columns_to_show])
     
-    with tab3:
+    with tab4:
         # Choice analytics
         st.subheader("Choice Distribution")
         
@@ -626,7 +738,7 @@ def analytics_page():
                     st.plotly_chart(fig2)
 
 def profile_page():
-    """User profile page"""
+    """User profile page with recent game story"""
     st.title("👤 Profile")
     
     user = st.session_state.user
@@ -646,7 +758,11 @@ def profile_page():
             for trait, value in user["trait_profile"].items():
                 st.progress(value / 100, text=f"{trait.capitalize()}: {value}")
     
-    # Update profile
+    # Display recent game story
+    st.markdown("---")
+    display_recent_game_story()
+    
+    # Update profile section
     st.markdown("---")
     st.subheader("Update Profile")
     

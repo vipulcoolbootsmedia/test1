@@ -7,8 +7,117 @@ from database import db
 from datetime import datetime
 import json
 import time
+from openai import OpenAI
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
 
 router = APIRouter(prefix="/sessions", tags=["sessions"])
+
+# Initialize OpenAI client for game summaries
+client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+
+def generate_game_summary(session_data: dict, user_data: dict) -> str:
+    """
+    Generate an AI-powered narrative summary of the entire gameplay session
+    """
+    try:
+        # Extract key information from session data
+        mode = session_data["session_info"]["mode"]
+        duration = session_data["session_info"]["total_duration"]
+        trait_changes = session_data["results"]["trait_changes"]
+        ending = session_data["results"]["ending_achieved"]
+        
+        # Build choice progression narrative
+        choice_progression = []
+        depth_keys = sorted([k for k in session_data.keys() if k.startswith("depth")])
+        
+        for depth_key in depth_keys:
+            depth_data = session_data[depth_key]
+            if depth_data.get("choice_taken"):
+                choice_id = depth_data["choice_taken"]
+                
+                # Find the chosen option details
+                chosen_choice = None
+                for choice in depth_data.get("choices", []):
+                    if choice["choice_id"] == choice_id:
+                        chosen_choice = choice
+                        break
+                
+                if chosen_choice:
+                    choice_progression.append({
+                        "depth": depth_key,
+                        "scenario": depth_data["scene_narrative"][0]["text"][:100] + "..." if depth_data.get("scene_narrative") else "",
+                        "choice": chosen_choice["choice_text"],
+                        "trait_impact": chosen_choice["maps_to_trait_details"],
+                        "hidden_message": chosen_choice.get("short_hidden_message", "")
+                    })
+        
+        # Create the prompt for OpenAI
+        prompt = f"""
+You are a psychological game analyst who creates engaging narrative summaries of gameplay sessions. 
+
+Create a compelling, personalized summary of this player's psychological thriller game session. The summary should read like a story excerpt that captures both the narrative journey and the psychological insights revealed through their choices.
+
+GAME SESSION DATA:
+- Mode: {mode.title()} Mode
+- Duration: {duration}
+- Ending Achieved: {ending}
+- Trait Changes: {trait_changes}
+- Player Username: {user_data.get('username', 'Unknown')}
+
+CHOICE PROGRESSION:
+"""
+        
+        for i, choice_data in enumerate(choice_progression, 1):
+            prompt += f"""
+Scenario {i}: {choice_data['scenario']}
+Player's Choice: {choice_data['choice']}
+Psychological Insight: {choice_data['hidden_message']}
+Trait Impact: {choice_data['trait_impact']['trait']} ({choice_data['trait_impact']['degree']})
+"""
+        
+        prompt += f"""
+
+INSTRUCTIONS:
+1. Write a 150-200 word narrative summary that feels like a psychological thriller story excerpt
+2. Focus on the player's psychological journey and character development
+3. Weave in the specific choices they made and what they reveal about their personality
+4. Reference their ending achievement: "{ending}"
+5. Make it engaging and personal - this is THEIR unique story
+6. Use third person perspective referring to "the player" or their username
+7. Include psychological insights but keep the tone dramatic and engaging
+8. End with a reflection on their overall character traits revealed through the session
+
+Write the summary now:
+"""
+        
+        # Call OpenAI API
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",  # Using a cost-effective model
+            messages=[
+                {
+                    "role": "system", 
+                    "content": "You are an expert psychological game analyst and creative writer who specializes in creating engaging, personalized narrative summaries of psychological thriller gameplay sessions."
+                },
+                {
+                    "role": "user", 
+                    "content": prompt
+                }
+            ],
+            max_tokens=300,
+            temperature=0.7
+        )
+        
+        game_summary = response.choices[0].message.content.strip()
+        print(f"Generated game summary for user {user_data.get('username', 'Unknown')}")
+        return game_summary
+        
+    except Exception as e:
+        print(f"Error generating game summary: {str(e)}")
+        # Fallback summary if AI fails
+        return f"In this {session_data['session_info']['mode']} mode session lasting {session_data['session_info']['total_duration']}, the player navigated through psychological challenges and achieved the '{session_data['results']['ending_achieved']}' ending. Their choices revealed key insights into their personality and decision-making patterns."
 
 @router.post("/", response_model=dict)
 async def create_session(
@@ -39,7 +148,7 @@ async def end_session(
     is_completed: bool = True,
     current_user: dict = Depends(get_current_active_user)
 ):
-    """End a session and record comprehensive game history"""
+    """End a session and record comprehensive game history with AI-generated summary"""
     # Verify session belongs to user
     session = SessionCRUD.get_session(session_id)
     if not session or session["user_id"] != current_user["userid"]:
@@ -53,7 +162,7 @@ async def end_session(
         is_completed
     )
     
-    # If the session was completed, update game history with comprehensive data
+    # If the session was completed, update game history with comprehensive data including AI summary
     if is_completed:
         try:
             # Calculate session duration
@@ -91,11 +200,12 @@ async def end_session(
             results = calculate_session_results(session_id, current_user["userid"])
             detailed_history["results"] = results
             
-            # Update user's game history
+            # Update user's game history (this will also generate the AI summary)
             update_user_game_history(current_user["userid"], session_id, detailed_history)
+            
         except Exception as e:
             # Log the error but still return success for the session update
-            print(f"Error updating game history: {str(e)}")
+            print(f"Error updating game history with AI summary: {str(e)}")
     
     return result
 
@@ -207,7 +317,7 @@ def build_grow_mode_history(session_id: int):
     return history
 
 def calculate_session_results(session_id: int, user_id: int):
-    """Calculate result summary for the session"""
+    """Calculate result summary for the session - Enhanced with AI game summary"""
     # Get all choices made
     choices = ChoiceCRUD.get_session_choices(session_id)
     
@@ -219,8 +329,6 @@ def calculate_session_results(session_id: int, user_id: int):
     
     # Process each choice to determine trait impacts
     for choice in choices:
-        # This is simplified - in a real implementation, you'd extract the trait
-        # from the choice data rather than using a single trait
         trait_impact = choice["trait_impact"]
         
         # In a real implementation, you'd determine which trait was affected
@@ -261,11 +369,13 @@ def calculate_session_results(session_id: int, user_id: int):
         "trait_changes": formatted_trait_changes,
         "ending_achieved": ending,
         "ending_message": ending_message,
-        "session_score": score
+        "session_score": score,
+        # Note: game_summary will be added after the session data is built
+        "game_summary": None  # Placeholder - will be filled in update_user_game_history
     }
 
 def update_user_game_history(user_id: int, session_id: int, detailed_history: dict):
-    """Update the user's game history with detailed session data"""
+    """Update the user's game history with detailed session data - Enhanced with AI game summary"""
     try:
         with db.get_cursor() as (cursor, connection):
             # Get current game history
@@ -280,6 +390,29 @@ def update_user_game_history(user_id: int, session_id: int, detailed_history: di
                     game_history = {}
             else:
                 game_history = {}
+            
+            # Get user data for AI summary generation
+            cursor.execute("""
+                SELECT username, trait_profile, game_played 
+                FROM user_info 
+                WHERE userid = %s
+            """, (user_id,))
+            user_result = cursor.fetchone()
+            
+            if user_result:
+                user_data = {
+                    "username": user_result[0],
+                    "trait_profile": json.loads(user_result[1]) if user_result[1] else {},
+                    "game_played": user_result[2]
+                }
+                
+                # Generate AI-powered game summary
+                print(f"Generating AI game summary for session {session_id}...")
+                game_summary = generate_game_summary(detailed_history, user_data)
+                
+                # Add the game summary to results
+                detailed_history["results"]["game_summary"] = game_summary
+                print(f"Added game summary to session {session_id}")
             
             # Add new session data
             game_history[f"session_{session_id}"] = detailed_history
