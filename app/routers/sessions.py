@@ -18,9 +18,10 @@ router = APIRouter(prefix="/sessions", tags=["sessions"])
 # Initialize OpenAI client for game summaries
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
-def generate_game_summary(session_data: dict, user_data: dict) -> str:
+def generate_game_summary(session_data: dict, user_data: dict) -> dict:
     """
-    Generate an AI-powered narrative summary of the entire gameplay session
+    Generate an AI-powered breakdown summary of the entire gameplay session
+    Returns: dict with story_summary, trait_summary, genre, and genre_description
     """
     try:
         # Extract key information from session data
@@ -31,6 +32,7 @@ def generate_game_summary(session_data: dict, user_data: dict) -> str:
         
         # Build choice progression narrative
         choice_progression = []
+        trait_impacts = {"high": 0, "moderate": 0, "low": 0}
         depth_keys = sorted([k for k in session_data.keys() if k.startswith("depth")])
         
         for depth_key in depth_keys:
@@ -46,78 +48,109 @@ def generate_game_summary(session_data: dict, user_data: dict) -> str:
                         break
                 
                 if chosen_choice:
+                    trait_impact_degree = chosen_choice["maps_to_trait_details"].get("degree", "moderate")
+                    trait_impacts[trait_impact_degree] += 1
+                    
                     choice_progression.append({
                         "depth": depth_key,
-                        "scenario": depth_data["scene_narrative"][0]["text"][:100] + "..." if depth_data.get("scene_narrative") else "",
-                        "choice": chosen_choice["choice_text"],
+                        "scenario": depth_data["scene_narrative"][0]["text"][:80] + "..." if depth_data.get("scene_narrative") else "",
+                        "choice": chosen_choice["choice_text"][:60] + "...",
                         "trait_impact": chosen_choice["maps_to_trait_details"],
                         "hidden_message": chosen_choice.get("short_hidden_message", "")
                     })
         
+        # Determine average choice pattern
+        total_choices = sum(trait_impacts.values())
+        if total_choices > 0:
+            high_percent = (trait_impacts["high"] / total_choices) * 100
+            moderate_percent = (trait_impacts["moderate"] / total_choices) * 100
+            low_percent = (trait_impacts["low"] / total_choices) * 100
+            
+            if high_percent >= 50:
+                avg_choice_trait = "Bold Risk-Taker"
+            elif moderate_percent >= 50:
+                avg_choice_trait = "Balanced Decision-Maker"
+            elif low_percent >= 50:
+                avg_choice_trait = "Cautious Strategist"
+            else:
+                avg_choice_trait = "Adaptive Player"
+        else:
+            avg_choice_trait = "Unknown Pattern"
+        
         # Create the prompt for OpenAI
         prompt = f"""
-You are a psychological game analyst who creates engaging narrative summaries of gameplay sessions. 
+You are a psychological game analyst. Create a structured breakdown of this player's session.
 
-Create a compelling, personalized summary of this player's psychological thriller game session. The summary should read like a story excerpt that captures both the narrative journey and the psychological insights revealed through their choices.
-
-GAME SESSION DATA:
-- Mode: {mode.title()} Mode
+GAME DATA:
+- Mode: {mode.title()}
 - Duration: {duration}
-- Ending Achieved: {ending}
-- Trait Changes: {trait_changes}
-- Player Username: {user_data.get('username', 'Unknown')}
+- Ending: {ending}
+- Username: {user_data.get('username', 'Player')}
+- Choice Pattern: {avg_choice_trait}
+- High Impact Choices: {trait_impacts['high']}/{total_choices}
+- Moderate Impact Choices: {trait_impacts['moderate']}/{total_choices}
+- Low Impact Choices: {trait_impacts['low']}/{total_choices}
 
-CHOICE PROGRESSION:
+CHOICE SUMMARY:
 """
         
         for i, choice_data in enumerate(choice_progression, 1):
-            prompt += f"""
-Scenario {i}: {choice_data['scenario']}
-Player's Choice: {choice_data['choice']}
-Psychological Insight: {choice_data['hidden_message']}
-Trait Impact: {choice_data['trait_impact']['trait']} ({choice_data['trait_impact']['degree']})
-"""
+            prompt += f"Depth {i}: {choice_data['choice']} (Impact: {choice_data['trait_impact']['degree']})\n"
         
         prompt += f"""
 
-INSTRUCTIONS:
-1. Write a 150-200 word narrative summary that feels like a psychological thriller story excerpt
-2. Focus on the player's psychological journey and character development
-3. Weave in the specific choices they made and what they reveal about their personality
-4. Reference their ending achievement: "{ending}"
-5. Make it engaging and personal - this is THEIR unique story
-6. Use third person perspective referring to "the player" or their username
-7. Include psychological insights but keep the tone dramatic and engaging
-8. End with a reflection on their overall character traits revealed through the session
+Return EXACTLY this JSON format (no additional text):
+{{
+  "story_summary": "80-word dramatic narrative of the player's journey through the scenarios",
+  "trait_summary": "Analysis of their {avg_choice_trait} pattern and what it reveals about their personality",
+  "genre": "One of: Psychological Horror, Mystery Thriller, Supernatural Drama, Dark Fantasy, or Suspense",
+  "genre_description": "Brief explanation of why this session fits that genre"
+}}
 
-Write the summary now:
+Requirements:
+- story_summary: Exactly 80 words, dramatic tone, third person
+- trait_summary: Focus on their choice pattern and psychological insights
+- genre: Pick the most fitting genre based on scenarios
+- genre_description: 1-2 sentences explaining the genre choice
 """
         
         # Call OpenAI API
         response = client.chat.completions.create(
-            model="gpt-4o-mini",  # Using a cost-effective model
+            model="gpt-4o-mini",
             messages=[
                 {
                     "role": "system", 
-                    "content": "You are an expert psychological game analyst and creative writer who specializes in creating engaging, personalized narrative summaries of psychological thriller gameplay sessions."
+                    "content": "You are a psychological game analyst who creates structured breakdowns of gameplay sessions. Always return valid JSON format exactly as requested."
                 },
                 {
                     "role": "user", 
                     "content": prompt
                 }
             ],
-            max_tokens=300,
+            max_tokens=400,
             temperature=0.7
         )
         
-        game_summary = response.choices[0].message.content.strip()
-        print(f"Generated game summary for user {user_data.get('username', 'Unknown')}")
+        # Parse the JSON response
+        response_text = response.choices[0].message.content.strip()
+        
+        # Clean up the response to ensure it's valid JSON
+        if response_text.startswith("```json"):
+            response_text = response_text.replace("```json", "").replace("```", "").strip()
+        
+        game_summary = json.loads(response_text)
+        print(f"Generated structured game summary for user {user_data.get('username', 'Unknown')}")
         return game_summary
         
     except Exception as e:
         print(f"Error generating game summary: {str(e)}")
-        # Fallback summary if AI fails
-        return f"In this {session_data['session_info']['mode']} mode session lasting {session_data['session_info']['total_duration']}, the player navigated through psychological challenges and achieved the '{session_data['results']['ending_achieved']}' ending. Their choices revealed key insights into their personality and decision-making patterns."
+        # Fallback structured summary if AI fails
+        return {
+            "story_summary": f"In this {session_data['session_info']['mode']} mode session lasting {session_data['session_info']['total_duration']}, the player navigated through psychological challenges and achieved the '{session_data['results']['ending_achieved']}' ending, revealing key insights into their decision-making patterns and personality traits.",
+            "trait_summary": f"Player demonstrated a {avg_choice_trait} approach with {trait_impacts['high']} high-impact, {trait_impacts['moderate']} moderate, and {trait_impacts['low']} low-impact choices.",
+            "genre": "Psychological Thriller",
+            "genre_description": "A psychological thriller focusing on the mental and emotional states of characters facing internal conflicts and moral dilemmas."
+        }
 
 @router.post("/", response_model=dict)
 async def create_session(

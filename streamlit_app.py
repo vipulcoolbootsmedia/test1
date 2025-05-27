@@ -482,12 +482,42 @@ def display_recent_game_story():
                 results = recent_session.get("results", {})
                 
                 if results.get("game_summary"):
-                    st.subheader("📖 Your Latest Story")
-                    st.markdown(f"*{results['game_summary']}*")
+                    summary_data = results["game_summary"]
                     
-                    # Show ending achieved
-                    if results.get("ending_achieved"):
-                        st.success(f"🏆 Latest Achievement: {results['ending_achieved']}")
+                    st.subheader("📖 Your Latest Story")
+                    
+                    # Handle both old format (string) and new format (dict)
+                    if isinstance(summary_data, str):
+                        # Old format - display as simple text
+                        st.markdown(f"*{summary_data}*")
+                        st.caption("🔄 This is an older format summary")
+                        
+                        # Show ending achieved
+                        if results.get("ending_achieved"):
+                            st.success(f"🏆 Latest Achievement: {results['ending_achieved']}")
+                            
+                    elif isinstance(summary_data, dict):
+                        # New format - display structured breakdown
+                        # Display story summary
+                        if summary_data.get("story_summary"):
+                            st.markdown(f"*{summary_data['story_summary']}*")
+                        
+                        # Show genre and ending in columns
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            if summary_data.get("genre"):
+                                st.success(f"🎭 Genre: {summary_data['genre']}")
+                        
+                        with col2:
+                            if results.get("ending_achieved"):
+                                st.success(f"🏆 Achievement: {results['ending_achieved']}")
+                        
+                        # Show psychological analysis
+                        if summary_data.get("trait_summary"):
+                            st.markdown("**🧠 Psychological Insight:**")
+                            st.info(summary_data["trait_summary"])
+                    else:
+                        st.warning("Invalid summary format")
 
 def analytics_page():
     """Analytics dashboard with enhanced game summary display"""
@@ -610,10 +640,34 @@ def analytics_page():
                         col1, col2 = st.columns([2, 1])
                         
                         with col1:
-                            # Display AI-generated game summary
+                            # Display AI-generated game summary breakdown
                             if results.get("game_summary"):
-                                st.markdown("### 📖 Your Story")
-                                st.markdown(f"*{results['game_summary']}*")
+                                summary_data = results["game_summary"]
+                                
+                                # Handle both old format (string) and new format (dict)
+                                if isinstance(summary_data, str):
+                                    # Old format - display as simple text
+                                    st.markdown("### 📖 Your Story")
+                                    st.markdown(f"*{summary_data}*")
+                                    st.caption("🔄 This is an older format summary")
+                                elif isinstance(summary_data, dict):
+                                    # New format - display structured breakdown
+                                    # Story Summary
+                                    st.markdown("### 📖 Your Story")
+                                    st.markdown(f"*{summary_data.get('story_summary', 'No story summary available')}*")
+                                    
+                                    # Genre Information
+                                    if summary_data.get("genre"):
+                                        st.markdown(f"**🎭 Genre:** {summary_data['genre']}")
+                                        if summary_data.get("genre_description"):
+                                            st.caption(summary_data["genre_description"])
+                                    
+                                    # Trait Analysis
+                                    if summary_data.get("trait_summary"):
+                                        st.markdown("### 🧠 Psychological Analysis")
+                                        st.markdown(summary_data["trait_summary"])
+                                else:
+                                    st.warning("Invalid summary format")
                             else:
                                 st.info("No AI summary available for this session")
                         
