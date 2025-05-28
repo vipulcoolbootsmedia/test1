@@ -14,48 +14,49 @@ load_dotenv()
 # Get API URL from environment variables, with fallback to localhost
 API_URL = os.getenv("API_URL", "http://localhost:8000")
 
+# In streamlit_app.py, update the make_request function
+
 def make_request(method, endpoint, data=None, token=None):
     """Make request to API with improved debugging and error handling"""
     url = f"{API_URL}{endpoint}"
     
-    print(f"Making {method} request to: {url}")  # Debug print
+    print(f"Making {method} request to: {url}")
     
     headers = {}
     if token:
-        # Ensure token has the Bearer prefix
         if not token.startswith("Bearer "):
             headers["Authorization"] = f"Bearer {token}"
         else:
             headers["Authorization"] = token
-        # Print first 10 chars of token for debugging
         print(f"Using token: {headers['Authorization'][:15]}...")
+    
+    # INCREASED TIMEOUT FOR AI GENERATION
+    timeout = 60  # Increased from 10 to 60 seconds
+    if "generate" in endpoint:
+        timeout = 120  # Even longer for AI generation endpoints
     
     try:
         if method == "GET":
-            response = requests.get(url, headers=headers, timeout=10)
+            response = requests.get(url, headers=headers, timeout=timeout)
         elif method == "POST":
-            response = requests.post(url, json=data, headers=headers, timeout=10)
+            response = requests.post(url, json=data, headers=headers, timeout=timeout)
         elif method == "PATCH":
-            response = requests.patch(url, json=data, headers=headers, timeout=10)
+            response = requests.patch(url, json=data, headers=headers, timeout=timeout)
         elif method == "PUT":
-            response = requests.put(url, json=data, headers=headers, timeout=10)
+            response = requests.put(url, json=data, headers=headers, timeout=timeout)
         elif method == "DELETE":
-            response = requests.delete(url, headers=headers, timeout=10)
+            response = requests.delete(url, headers=headers, timeout=timeout)
         else:
             st.error(f"Unsupported method: {method}")
             return None
         
-        # Debug response info
         print(f"Response status: {response.status_code}")
         
-        # Log detailed info for non-200 responses
         if response.status_code >= 400:
             print(f"Error response: {response.text[:200]}...")
             
-            # Handle common errors with user-friendly messages
             if response.status_code == 401:
                 st.warning("Your session has expired. Please log in again.")
-                # Clear token on 401 to force re-login
                 if 'token' in st.session_state:
                     del st.session_state.token
             elif response.status_code == 403:
@@ -70,19 +71,19 @@ def make_request(method, endpoint, data=None, token=None):
         return response
         
     except requests.exceptions.ConnectionError as e:
-        print(f"Connection error details: {str(e)}")  # Detailed logging
+        print(f"Connection error details: {str(e)}")
         st.error(f"Failed to connect to API at {url}. Please make sure the API server is running.")
         return None
     except requests.exceptions.Timeout as e:
-        print(f"Timeout error details: {str(e)}")  # Detailed logging
-        st.error("API request timed out. The server may be experiencing high load.")
+        print(f"Timeout error details: {str(e)}")
+        st.error(f"API request timed out after {timeout} seconds. The AI is taking longer than usual to generate scenarios.")
         return None
     except requests.exceptions.RequestException as e:
-        print(f"Request error details: {str(e)}")  # Detailed logging
+        print(f"Request error details: {str(e)}")
         st.error(f"Request error: {str(e)}")
         return None
     except Exception as e:
-        print(f"Unexpected error: {str(e)}")  # Detailed logging
+        print(f"Unexpected error: {str(e)}")
         st.error(f"Unexpected error: {str(e)}")
         return None
     
